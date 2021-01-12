@@ -23,7 +23,9 @@ Vagrant.configure("2") do |config|
   # Every Vagrant development environment requires a box. You can search for
   # boxes at https://vagrantcloud.com/search.
   config.vm.box = "ubuntu/focal64"
-  config.vm.synced_folder ".", "/synced_folder", mount_options: ["dmode=777,fmode=777"]
+  config.vm.synced_folder ".", "/synced_folder", 
+	owner: "vagrant", group: "vagrant",
+	mount_options: ["dmode=777,fmode=777"]
   config.vm.provision "shell", path: "provision.sh", privileged: false
   # config.vm.provision "shell", path: "install.sh"
 
