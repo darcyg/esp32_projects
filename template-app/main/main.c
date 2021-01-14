@@ -1,9 +1,3 @@
-/* LEDC (LED Controller) fade example
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -12,12 +6,6 @@
 #include "freertos/task.h"
 #include "driver/ledc.h"
 #include "esp_err.h"
-
-#include <driver/adc.h>
-#include "driver/gpio.h"
-#include "esp_adc_cal.h"
-
-
 
 /*
  * About this example
@@ -40,25 +28,17 @@
  *    GPIO4/5 are from low speed channel group.
  *
  */
+
+
 #define LEDC_HS_TIMER          LEDC_TIMER_0
 #define LEDC_HS_MODE           LEDC_HIGH_SPEED_MODE
-#define LEDC_HS_CH0_GPIO       (18)
+#define PWM_CH_1               (27)
+#define PWM_CH_2               (14)
+#define PWM_CH_3               (12)
+#define PWM_CH_4               (13)
 #define LEDC_HS_CH0_CHANNEL    LEDC_CHANNEL_0
-
 #define DUTY_RESOLUTION        LEDC_TIMER_14_BIT
-
-#define LEDC_TEST_CH_NUM       (1)
-
-#define DEFAULT_VREF    3300        //Use adc2_vref_to_gpio() to obtain a better estimate
-#define NO_OF_SAMPLES   20          //Multisampling
-
-
-static esp_adc_cal_characteristics_t *adc_chars;
-static const adc_channel_t channel = ADC1_CHANNEL_5;     //GPIO34 if ADC1, GPIO14 if ADC2
-static const adc_bits_width_t width = ADC_WIDTH_BIT_12;
-
-static const adc_atten_t atten = ADC_ATTEN_DB_11;
-static const adc_unit_t unit = ADC_UNIT_1;
+#define LEDC_TEST_CH_NUM       (4)
 
 int get_abs_duty(float rel_duty, int duty_resolution)
 {   
@@ -84,32 +64,9 @@ float throttle_to_duty(float throttle)
     return duty;
 };
 
-static void print_char_val_type(esp_adc_cal_value_t val_type)
-{
-    if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
-        printf("Characterized using Two Point Value\n");
-    } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-        printf("Characterized using eFuse Vref\n");
-    } else {
-        printf("Characterized using Default Vref\n");
-    }
-}
-
 void app_main(void)
 {   
-
     int ch;
-
-    //Configure ADC
-    adc1_config_width(width);
-    adc1_config_channel_atten(channel, atten);
-
-
-    //Characterize ADC
-    adc_chars = calloc(1, sizeof(esp_adc_cal_characteristics_t));
-    esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adc_chars);
-    print_char_val_type(val_type);
-
     /*
      * Prepare and set configuration of timers
      * that will be used by LED Controller
@@ -139,7 +96,31 @@ void app_main(void)
         {
             .channel    = LEDC_HS_CH0_CHANNEL,
             .duty       = 0,
-            .gpio_num   = LEDC_HS_CH0_GPIO,
+            .gpio_num   = PWM_CH_1,
+            .speed_mode = LEDC_HS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_HS_TIMER
+        },
+        {
+            .channel    = LEDC_HS_CH0_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = PWM_CH_2,
+            .speed_mode = LEDC_HS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_HS_TIMER
+        },
+        {
+            .channel    = LEDC_HS_CH0_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = PWM_CH_3,
+            .speed_mode = LEDC_HS_MODE,
+            .hpoint     = 0,
+            .timer_sel  = LEDC_HS_TIMER
+        },
+        {
+            .channel    = LEDC_HS_CH0_CHANNEL,
+            .duty       = 0,
+            .gpio_num   = PWM_CH_4,
             .speed_mode = LEDC_HS_MODE,
             .hpoint     = 0,
             .timer_sel  = LEDC_HS_TIMER
@@ -150,33 +131,76 @@ void app_main(void)
     for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) {
         ledc_channel_config(&ledc_channel[ch]);
     }
+    
+
+    // set to 0 
 
     float duty; // in percent
     int duty_conv;
-    float throttle;
-    printf("Change Poti to control LED...%d \n", width);
-    while (1) {       
-        uint32_t adc_reading = 0;
-        //Multisampling
-        for (int i = 0; i < NO_OF_SAMPLES; i++) 
+    float throttle = 0.0; 
+
+    printf("Throttle: %.2f\n", throttle);
+    duty = throttle_to_duty(throttle);
+    duty_conv = get_abs_duty(duty, DUTY_RESOLUTION);
+    printf("duty: %.2f \t duty_conv: %d\n", duty, duty_conv);
+    for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) 
         {
-            adc_reading += adc1_get_raw((adc1_channel_t)channel);
+            ledc_set_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, duty_conv);
+            ledc_update_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel);
         }
-        adc_reading /= NO_OF_SAMPLES;
-        //Convert adc_reading to voltage in mV
-        uint32_t voltage = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
-        printf("Raw: %d\tVoltage: %dmV\n", adc_reading, voltage);
 
-        throttle = adc_reading/pow(2, 12) * 100; 
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    // set to 100 
+    throttle = 100.0; 
+
+    printf("Throttle: %.2f\n", throttle);
+    duty = throttle_to_duty(throttle);
+    duty_conv = get_abs_duty(duty, DUTY_RESOLUTION);
+    printf("duty: %.2f \t duty_conv: %d\n", duty, duty_conv);
+    for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) 
+        {
+            ledc_set_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, duty_conv);
+            ledc_update_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel);
+        }
+
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    // set to 0 
+    throttle = 0.0; 
+
+    printf("Throttle: %.2f\n", throttle);
+    duty = throttle_to_duty(throttle);
+    duty_conv = get_abs_duty(duty, DUTY_RESOLUTION);
+    printf("duty: %.2f \t duty_conv: %d\n", duty, duty_conv);
+    for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) 
+        {
+            ledc_set_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, duty_conv);
+            ledc_update_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel);
+        }
+
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    
+
+
+    while (1) {
+        throttle += 1; 
+        if(throttle > 100)
+        {
+            throttle = 0.0;
+        }
+        
         printf("Throttle: %.2f\n", throttle);
-
         duty = throttle_to_duty(throttle);
         duty_conv = get_abs_duty(duty, DUTY_RESOLUTION);
         printf("duty: %.2f \t duty_conv: %d\n", duty, duty_conv);
-        ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, duty_conv);
-        ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
+        for (ch = 0; ch < LEDC_TEST_CH_NUM; ch++) 
+        {
+            ledc_set_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel, duty_conv);
+            ledc_update_duty(ledc_channel[ch].speed_mode, ledc_channel[ch].channel);
+        }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(30));
 
         // ledc_set_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel, 16384);
         // ledc_update_duty(ledc_channel[0].speed_mode, ledc_channel[0].channel);
