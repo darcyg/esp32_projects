@@ -7,7 +7,7 @@
   "[c]": {
     "editor.quickSuggestions": true
   },
-  "C_Cpp.intelliSenseEngine": "Tag Parser",
+  "C_Cpp.intelliSenseEngine": "Disabled",
   "idf.port": "/dev/ttyUSB0",
   "files.associations": {
     "cmath": "c",

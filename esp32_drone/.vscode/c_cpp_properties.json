@@ -3,6 +3,7 @@
         {
             "name": "ESP-IDF",
             "compilerPath": "${default}",
+            "intelliSenseMode":"${default}",
             "cStandard": "c11",
             "cppStandard": "c++17",
             "includePath": [
