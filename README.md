@@ -1,5 +1,5 @@
-# esp32_vagrant_test
-project to test the esp32 workbench using vagrant and visual studio code with remote ssh and espressif extension 
+# esp32_projects
+project to test the esp32-idf workbench using vagrant and visual studio code with remote ssh and espressif extension 
 
 ## Purpose
 Create an environment for embedded development with the espressif esp32 board using Visual Studio Code (VSCode) on a remote ssh connection into an ubuntu (20.04LTS) based virtual box hosted via 
