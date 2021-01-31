@@ -1,8 +1,10 @@
 #include <math.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <stdio.h>
+#include <string>
+#include <cstring>
+using namespace std;
 
 #include <sys/unistd.h>
 #include <sys/stat.h>
@@ -24,81 +26,14 @@
 #include "mpu/math.hpp"
 #include "mpu/types.hpp"
 
-
-/* Bus configuration */
-
-// This MACROS are defined in "skdconfig.h" and set through 'menuconfig'.
-// Can use to check which protocol has been selected.
-
-#include "SPIbus.hpp"
-static SPI_t& spi                     = vspi;  // hspi or vspi
-static constexpr int MOSI             = 23;
-static constexpr int MISO             = 19;
-static constexpr int SCLK             = 18;
-static constexpr int CS               = 5;
-static constexpr uint32_t CLOCK_SPEED_LOW = 1*1000*1000;  // 1MHz
-static constexpr uint32_t CLOCK_SPEED_HIGH = 10*1000*1000;  // 10MHz
-
-static constexpr int LOG_PIN          = 33;
-
-
-void mpu_spi_pre_transfer_callback(spi_transaction_t *t)
-{
-    gpio_set_level((gpio_num_t)CS, 0);
-}
-
-void mpu_spi_post_transfer_callback(spi_transaction_t *t)
-{
-    gpio_set_level((gpio_num_t)CS, 1);
-}
-
-
-/* MPU configuration */
-
-static constexpr int kInterruptPin         = 34;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 500;  // Hz
-static constexpr mpud::accel_fs_t kAccelFS = mpud::ACCEL_FS_4G;
-static constexpr mpud::gyro_fs_t kGyroFS   = mpud::GYRO_FS_500DPS;
-static constexpr mpud::dlpf_t kDLPF        = mpud::DLPF_98HZ;
-static constexpr mpud::int_config_t kInterruptConfig{
-    .level = mpud::INT_LVL_ACTIVE_HIGH,
-    .drive = mpud::INT_DRV_PUSHPULL,
-    .mode  = mpud::INT_MODE_PULSE50US,
-    .clear = mpud::INT_CLEAR_STATUS_REG  //
-};
-
-// FIFO
-constexpr uint16_t kFIFOPacketSize = 12;  // in Byte
-constexpr uint16_t kFIFOSize = 512;  // in Byte
-
-/*-*/
-
-static const char* TAG = "MPU9250";
-
-// SD card configuation
-static constexpr int PIN_NUM_SD_CMD            = 15;
-static constexpr int PIN_NUM_SD_D0             = 2;
-static constexpr int PIN_NUM_SD_D1             = 4;
-static constexpr int PIN_NUM_SD_D2             = 12;
-static constexpr int PIN_NUM_SD_D3             = 13;
-
-#define MOUNT_POINT "/sdcard"
-
-
-// Tasks 
-
-static void mpuISR(void*);
-static void mpuTask(void*);
-static void printTask(void*);
-
-TaskHandle_t mpu_task_handle = NULL; 
-TaskHandle_t print_task_handle = NULL; 
-xQueueHandle data_queue; 
+#include "main.hpp"
 
 // Main
 extern "C" void app_main()
 {
     ESP_LOGI(TAG, "$ MPU Driver Example: Advanced\n");
+    mount_sd_card();
+    ESP_LOGI(TAG, "$ SD card initialized\n");
     // Initialize bus through either the Library API or esp-idf API
     spi.begin(MOSI, MISO, SCLK);
 
@@ -108,7 +43,8 @@ extern "C" void app_main()
     // Create a task to setup mpu and read sensor data
     xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, &mpu_task_handle);
     // Create a task to print angles
-    xTaskCreate(printTask, "printTask", 2 * 2048, nullptr, 0, &print_task_handle);
+    const char * filename = get_filename();
+    xTaskCreate(printTask, "printTask", 2 * 2048, (void*) filename, 0, &print_task_handle);
 }
 
 /* Tasks */
@@ -136,7 +72,7 @@ static void mpuTask(void*)
     // Verify connection
     while (esp_err_t err = MPU.testConnection()) {
         ESP_LOGE(TAG, "Failed to connect to the MPU, error=%#X", err);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
     ESP_LOGI(TAG, "MPU connection successful!");
 
@@ -147,7 +83,7 @@ static void mpuTask(void*)
     mpud::selftest_t retSelfTest;
     while (esp_err_t err = MPU.selfTest(&retSelfTest)) {
         ESP_LOGE(TAG, "Failed to perform MPU Self-Test, error=%#X", err);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
     ESP_LOGI(TAG, "MPU Self-Test result: Gyro=%s Accel=%s",  //
              (retSelfTest & mpud::SELF_TEST_GYRO_FAIL ? "FAIL" : "OK"),
@@ -215,6 +151,7 @@ static void mpuTask(void*)
         // ESP_LOGI(TAG, "FIFO count: %d", fifocount);
         if ((fifocount % kFIFOPacketSize)) {
             ESP_LOGE(TAG, "FIFO Count misaligned! Expected: %d, Actual: %d", kFIFOPacketSize, fifocount);
+            // TODO: Check why this happens and error-handle!!! 
         }
         // Burst read data from FIFO
         uint8_t FIFOpacket[kFIFOSize];
@@ -238,10 +175,84 @@ static void mpuTask(void*)
     vTaskDelete(nullptr);
 }
 
-static void printTask(void*)
+static void printTask(void * fn)
 {   
+    // Use POSIX and C standard library functions to work with files.
+    // First create a file.
+    // TODO: Check options to assign file to random sector to increase longevity of sd card 
+    const char* filename = (const char*) fn; 
+    ESP_LOGI(TAG, "Opening file: %s", filename);
+    char filepath[100];
+    strcpy(filepath, MOUNT_POINT); 
+    strcat(filepath, "/");
+    strcat(filepath, filename);
+
+    FILE* f = fopen(filepath, "w");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return;
+    }
     //
-    // Create filesystem and prepare file 
+    // File created 
+    // 
+    while (true) {
+        // Write data to file 
+        // TODO: 
+        // Bytes 0...507:   sensor reads from fifo (currently only ~0...360 are used -> OPTIMIZTION POTENTIAL)
+        // Bytes 508, 509:  timestamp (of the last MPU-interrupt?!) 
+        // Bytes 510, 511:  fifo byte count 
+        // ----> 4 of these packets per fwrite
+        uint8_t FIFOpacket[kFIFOSize];
+        mpud::raw_axes_t rawAccel;
+        mpud::raw_axes_t rawGyro;
+        mpud::float_axes_t accelG;   // accel axes in (g) gravity format
+        mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
+        if(xQueueReceive(data_queue, (void*) FIFOpacket, 10000/portTICK_PERIOD_MS)!=pdTRUE){
+            ESP_LOGE(TAG, "Reading from queue faled. \n");
+        }
+        else{
+            ESP_LOGI(TAG, "Successfully read data package from queue.");
+            uint16_t fifocount; 
+            fifocount = ((uint16_t)FIFOpacket[511] << 8) | FIFOpacket[510]; 
+            // ESP_LOGI(TAG, "fifocount read: %d", fifocount);
+            gpio_set_level((gpio_num_t)LOG_PIN, 0);
+            fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), f);
+            for(uint16_t i = 0; i < fifocount;i+=kFIFOPacketSize){
+                /*
+                 ESP_LOGI(TAG, "Packet Nb.: %d", i);
+                rawAccel.x = FIFOpacket[i] << 8 | FIFOpacket[i+1];
+                rawAccel.y = FIFOpacket[i+2] << 8 | FIFOpacket[i+3];
+                rawAccel.z = FIFOpacket[i+4] << 8 | FIFOpacket[i+5];
+                rawGyro.x  = FIFOpacket[i+6] << 8 | FIFOpacket[i+7];
+                rawGyro.y  = FIFOpacket[i+8] << 8 | FIFOpacket[i+9];
+                rawGyro.z  = FIFOpacket[i+10] << 8 | FIFOpacket[i+11];
+                accelG = mpud::accelGravity(rawAccel, mpud::ACCEL_FS_4G);
+                gyroDPS = mpud::gyroDegPerSec(rawGyro, mpud::GYRO_FS_500DPS);
+                ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
+                */
+            }
+            gpio_set_level((gpio_num_t)LOG_PIN, 1);
+        }
+        if(false){
+            fclose(f);
+            ESP_LOGI(TAG, "File closed. Deleting PrintTask...");
+            vTaskDelete(print_task_handle);
+        }
+            
+    }
+}
+
+static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
+{
+    BaseType_t HPTaskWoken = pdFALSE;
+    vTaskNotifyGiveFromISR(taskHandle, &HPTaskWoken);
+    if (HPTaskWoken == pdTRUE) portYIELD_FROM_ISR();
+}
+
+static void mount_sd_card(void)
+{
+    //
+    // Create filesystem and mount 
     // 
     esp_err_t ret;
     // Options for mounting the filesystem.
@@ -294,71 +305,8 @@ static void printTask(void*)
 
     // Card has been initialized, print its properties
     sdmmc_card_print_info(stdout, card);
-
-    // Use POSIX and C standard library functions to work with files.
-    // First create a file.
-    // TODO: Check options to assign file to random sector to increase longevity of sd card 
-    ESP_LOGI(TAG, "Opening file");
-    FILE* f = fopen(MOUNT_POINT"/tmp.imu", "w");
-    if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
-        return;
-    }
-    //
-    // filesystem and file created 
-    // 
-    uint16_t dummy_test = 0;
-    while (true) {
-        // Write data to file 
-        // TODO: 
-        // Bytes 0...507:   sensor reads from fifo (currently only ~0...360 are used -> OPTIMIZTION POTENTIAL)
-        // Bytes 508, 509:  timestamp (of the last MPU-interrupt?!) 
-        // Bytes 510, 511:  fifo byte count 
-        // ----> 4 of these packets per fwrite
-        uint8_t FIFOpacket[kFIFOSize];
-        mpud::raw_axes_t rawAccel;
-        mpud::raw_axes_t rawGyro;
-        mpud::float_axes_t accelG;   // accel axes in (g) gravity format
-        mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
-        if(xQueueReceive(data_queue, (void*) FIFOpacket, 10000/portTICK_PERIOD_MS)!=pdTRUE){
-            ESP_LOGE(TAG, "Reading from queue faled. \n");
-        }
-        else{
-            ESP_LOGI(TAG, "Successfully read data package from queue.");
-            uint16_t fifocount; 
-            fifocount = ((uint16_t)FIFOpacket[511] << 8) | FIFOpacket[510]; 
-            // ESP_LOGI(TAG, "fifocount read: %d", fifocount);
-            gpio_set_level((gpio_num_t)LOG_PIN, 0);
-            fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), f);
-            for(uint16_t i = 0; i < fifocount;i+=kFIFOPacketSize){
-                /*
-                 ESP_LOGI(TAG, "Packet Nb.: %d", i);
-                rawAccel.x = FIFOpacket[i] << 8 | FIFOpacket[i+1];
-                rawAccel.y = FIFOpacket[i+2] << 8 | FIFOpacket[i+3];
-                rawAccel.z = FIFOpacket[i+4] << 8 | FIFOpacket[i+5];
-                rawGyro.x  = FIFOpacket[i+6] << 8 | FIFOpacket[i+7];
-                rawGyro.y  = FIFOpacket[i+8] << 8 | FIFOpacket[i+9];
-                rawGyro.z  = FIFOpacket[i+10] << 8 | FIFOpacket[i+11];
-                accelG = mpud::accelGravity(rawAccel, mpud::ACCEL_FS_4G);
-                gyroDPS = mpud::gyroDegPerSec(rawGyro, mpud::GYRO_FS_500DPS);
-                ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
-                */
-            }
-            gpio_set_level((gpio_num_t)LOG_PIN, 1);
-        }
-        dummy_test ++; 
-        if(dummy_test > 2000){
-            fclose(f);
-            ESP_LOGI(TAG, "File closed. Deleting PrintTask...");
-            vTaskDelete(print_task_handle);
-        }
-            
-    }
 }
-
-static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
+static const char* get_filename()
 {
-    BaseType_t HPTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(taskHandle, &HPTaskWoken);
-    if (HPTaskWoken == pdTRUE) portYIELD_FROM_ISR();
+    return "tmp003.imu";
 }

@@ -22,6 +22,7 @@
         "string_view": "cpp",
         "initializer_list": "cpp",
         "*.ipp": "cpp",
-        "typeinfo": "cpp"
+        "typeinfo": "cpp",
+        "functional": "cpp"
     }
 }
