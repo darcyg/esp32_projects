@@ -2,11 +2,18 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include <sys/unistd.h>
+#include <sys/stat.h>
+#include "sdmmc_cmd.h"
+#include "driver/sdmmc_host.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_vfs_fat.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/queue.h"
@@ -32,6 +39,8 @@ static constexpr int CS               = 5;
 static constexpr uint32_t CLOCK_SPEED_LOW = 1*1000*1000;  // 1MHz
 static constexpr uint32_t CLOCK_SPEED_HIGH = 10*1000*1000;  // 10MHz
 
+static constexpr int LOG_PIN          = 33;
+
 
 void mpu_spi_pre_transfer_callback(spi_transaction_t *t)
 {
@@ -47,7 +56,7 @@ void mpu_spi_post_transfer_callback(spi_transaction_t *t)
 /* MPU configuration */
 
 static constexpr int kInterruptPin         = 34;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 50;  // Hz
+static constexpr uint16_t kSampleRate      = 500;  // Hz
 static constexpr mpud::accel_fs_t kAccelFS = mpud::ACCEL_FS_4G;
 static constexpr mpud::gyro_fs_t kGyroFS   = mpud::GYRO_FS_500DPS;
 static constexpr mpud::dlpf_t kDLPF        = mpud::DLPF_98HZ;
@@ -66,10 +75,24 @@ constexpr uint16_t kFIFOSize = 512;  // in Byte
 
 static const char* TAG = "MPU9250";
 
+// SD card configuation
+static constexpr int PIN_NUM_SD_CMD            = 15;
+static constexpr int PIN_NUM_SD_D0             = 2;
+static constexpr int PIN_NUM_SD_D1             = 4;
+static constexpr int PIN_NUM_SD_D2             = 12;
+static constexpr int PIN_NUM_SD_D3             = 13;
+
+#define MOUNT_POINT "/sdcard"
+
+
+// Tasks 
+
 static void mpuISR(void*);
 static void mpuTask(void*);
 static void printTask(void*);
 
+TaskHandle_t mpu_task_handle = NULL; 
+TaskHandle_t print_task_handle = NULL; 
 xQueueHandle data_queue; 
 
 // Main
@@ -83,9 +106,9 @@ extern "C" void app_main()
     uint8_t data_frame[kFIFOSize];
     data_queue = xQueueCreate(10, sizeof(data_frame));
     // Create a task to setup mpu and read sensor data
-    xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, nullptr);
+    xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, &mpu_task_handle);
     // Create a task to print angles
-    xTaskCreate(printTask, "printTask", 2 * 2048, nullptr, 0, nullptr);
+    xTaskCreate(printTask, "printTask", 2 * 2048, nullptr, 0, &print_task_handle);
 }
 
 /* Tasks */
@@ -97,6 +120,10 @@ static void mpuTask(void*)
     //Initialize non-SPI GPIOs
     gpio_set_direction((gpio_num_t)CS, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)CS, 1);
+
+    gpio_set_direction((gpio_num_t)LOG_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)LOG_PIN, 1);
+
     // Let MPU know which bus and address to use
 
     MPU.setBus(spi);
@@ -212,9 +239,82 @@ static void mpuTask(void*)
 }
 
 static void printTask(void*)
-{
-    // vTaskDelay(2000 / portTICK_PERIOD_MS);
+{   
+    //
+    // Create filesystem and prepare file 
+    // 
+    esp_err_t ret;
+    // Options for mounting the filesystem.
+    // If format_if_mount_failed is set to true, SD card will be partitioned and
+    // formatted in case when mounting fails.
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+    sdmmc_card_t* card;
+    const char mount_point[] = MOUNT_POINT;
+    ESP_LOGI(TAG, "Initializing SD card");
+
+    // Use settings defined above to initialize SD card and mount FAT filesystem.
+    // Note: esp_vfs_fat_sdmmc/sdspi_mount is all-in-one convenience functions.
+    // Please check its source code and implement error recovery when developing
+    // production applications.
+    ESP_LOGI(TAG, "Using SDMMC peripheral");
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+
+    // This initializes the slot without card detect (CD) and write protect (WP) signals.
+    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+
+    // To use 1-line SD mode, uncomment the following line:
+    slot_config.width = 1;
+
+    // GPIOs 15, 2, 4, 12, 13 should have external 10k pull-ups.
+    // Internal pull-ups are not sufficient. However, enabling internal pull-ups
+    // does make a difference some boards, so we do that here.
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_CMD, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_CMD, needed in 4- and 1- line modes
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D0, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D0, needed in 4- and 1-line modes
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D1, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D1, needed in 4-line mode only ****
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D2, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D2, needed in 4-line mode only ****
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D3, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D3, needed in 4- and 1-line modes
+
+    ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
+
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount filesystem. "
+                "If you want the card to be formatted, set the EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize the card (%s). "
+                "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret));
+        }
+        return;
+    }
+
+    // Card has been initialized, print its properties
+    sdmmc_card_print_info(stdout, card);
+
+    // Use POSIX and C standard library functions to work with files.
+    // First create a file.
+    // TODO: Check options to assign file to random sector to increase longevity of sd card 
+    ESP_LOGI(TAG, "Opening file");
+    FILE* f = fopen(MOUNT_POINT"/tmp.imu", "w");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return;
+    }
+    //
+    // filesystem and file created 
+    // 
+    uint16_t dummy_test = 0;
     while (true) {
+        // Write data to file 
+        // TODO: 
+        // Bytes 0...507:   sensor reads from fifo (currently only ~0...360 are used -> OPTIMIZTION POTENTIAL)
+        // Bytes 508, 509:  timestamp (of the last MPU-interrupt?!) 
+        // Bytes 510, 511:  fifo byte count 
+        // ----> 4 of these packets per fwrite
         uint8_t FIFOpacket[kFIFOSize];
         mpud::raw_axes_t rawAccel;
         mpud::raw_axes_t rawGyro;
@@ -224,12 +324,15 @@ static void printTask(void*)
             ESP_LOGE(TAG, "Reading from queue faled. \n");
         }
         else{
-            // ESP_LOGI(TAG, "Successfully read data package from queue.");
+            ESP_LOGI(TAG, "Successfully read data package from queue.");
             uint16_t fifocount; 
             fifocount = ((uint16_t)FIFOpacket[511] << 8) | FIFOpacket[510]; 
             // ESP_LOGI(TAG, "fifocount read: %d", fifocount);
+            gpio_set_level((gpio_num_t)LOG_PIN, 0);
+            fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), f);
             for(uint16_t i = 0; i < fifocount;i+=kFIFOPacketSize){
-                // ESP_LOGI(TAG, "Packet Nb.: %d", i);
+                /*
+                 ESP_LOGI(TAG, "Packet Nb.: %d", i);
                 rawAccel.x = FIFOpacket[i] << 8 | FIFOpacket[i+1];
                 rawAccel.y = FIFOpacket[i+2] << 8 | FIFOpacket[i+3];
                 rawAccel.z = FIFOpacket[i+4] << 8 | FIFOpacket[i+5];
@@ -239,9 +342,17 @@ static void printTask(void*)
                 accelG = mpud::accelGravity(rawAccel, mpud::ACCEL_FS_4G);
                 gyroDPS = mpud::gyroDegPerSec(rawGyro, mpud::GYRO_FS_500DPS);
                 ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
+                */
             }
+            gpio_set_level((gpio_num_t)LOG_PIN, 1);
         }
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        dummy_test ++; 
+        if(dummy_test > 2000){
+            fclose(f);
+            ESP_LOGI(TAG, "File closed. Deleting PrintTask...");
+            vTaskDelete(print_task_handle);
+        }
+            
     }
 }
 

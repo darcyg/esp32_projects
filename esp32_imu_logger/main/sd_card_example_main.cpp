@@ -18,6 +18,9 @@
 #include "sdmmc_cmd.h"
 #include "sdkconfig.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "MPU.hpp"
 #include "SPIbus.hpp"
 
@@ -27,54 +30,38 @@
 
 static const char *TAG = "example";
 
+static constexpr int PIN_NUM_SD_CMD            = 15;
+static constexpr int PIN_NUM_SD_D0             = 2;
+static constexpr int PIN_NUM_SD_D1             = 4;
+static constexpr int PIN_NUM_SD_D2             = 12;
+static constexpr int PIN_NUM_SD_D3             = 13;
+
+
+static constexpr int PIN_NUM_IMU_MOSI            = 23;
+static constexpr int PIN_NUM_IMU_MISO            = 19;
+static constexpr int PIN_NUM_IMU_SCLK            = 18;
+static constexpr int PIN_NUM_IMU_CS              = 5;
+static constexpr int PIN_NUM_IMU_INT             = 34;
+
+static constexpr int LOG_PIN                     = 33;
+
+
 #define MOUNT_POINT "/sdcard"
 
-// This example can use SDMMC and SPI peripherals to communicate with SD card.
-// By default, SDMMC peripheral is used.
-// To enable SPI mode, uncomment the following line:
-
-// #define USE_SPI_MODE
-
-// ESP32-S2 doesn't have an SD Host peripheral, always use SPI:
-#ifdef CONFIG_IDF_TARGET_ESP32S2
-#ifndef USE_SPI_MODE
-#define USE_SPI_MODE
-#endif // USE_SPI_MODE
-// on ESP32-S2, DMA channel must be the same as host id
-#define SPI_DMA_CHAN    host.slot
-#endif //CONFIG_IDF_TARGET_ESP32S2
-
-// DMA channel to be used by the SPI peripheral
-#ifndef SPI_DMA_CHAN
-#define SPI_DMA_CHAN    1
-#endif //SPI_DMA_CHAN
-
-// When testing SD and SPI modes, keep in mind that once the card has been
-// initialized in SPI mode, it can not be reinitialized in SD mode without
-// toggling power to the card.
-
-#ifdef USE_SPI_MODE
-// Pin mapping when using SPI mode.
-// With this mapping, SD card can be used both in SPI and 1-line SD mode.
-// Note that a pull-up on CS line is required in SD mode.
-#define PIN_NUM_MISO 2
-#define PIN_NUM_MOSI 15
-#define PIN_NUM_CLK  14
-#define PIN_NUM_CS   13
-#endif //USE_SPI_MODE
 
 extern "C" void app_main(void)
 {
+    //Initialize GPIOs for debugging
+    gpio_set_direction((gpio_num_t)LOG_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)LOG_PIN, 1);
+
+
     esp_err_t ret;
     // Options for mounting the filesystem.
     // If format_if_mount_failed is set to true, SD card will be partitioned and
     // formatted in case when mounting fails.
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-#ifdef CONFIG_EXAMPLE_FORMAT_IF_MOUNT_FAILED
-        .format_if_mount_failed = true,
-#else
         .format_if_mount_failed = false,
-#endif // EXAMPLE_FORMAT_IF_MOUNT_FAILED
         .max_files = 5,
         .allocation_unit_size = 16 * 1024
     };
@@ -86,7 +73,6 @@ extern "C" void app_main(void)
     // Note: esp_vfs_fat_sdmmc/sdspi_mount is all-in-one convenience functions.
     // Please check its source code and implement error recovery when developing
     // production applications.
-#ifndef USE_SPI_MODE
     ESP_LOGI(TAG, "Using SDMMC peripheral");
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
 
@@ -100,39 +86,13 @@ extern "C" void app_main(void)
     // GPIOs 15, 2, 4, 12, 13 should have external 10k pull-ups.
     // Internal pull-ups are not sufficient. However, enabling internal pull-ups
     // does make a difference some boards, so we do that here.
-    gpio_set_pull_mode((gpio_num_t)15, GPIO_PULLUP_ONLY);   // CMD, needed in 4- and 1- line modes
-    gpio_set_pull_mode((gpio_num_t)2, GPIO_PULLUP_ONLY);    // D0, needed in 4- and 1-line modes
-    gpio_set_pull_mode((gpio_num_t)4, GPIO_PULLUP_ONLY);    // D1, needed in 4-line mode only ****
-    gpio_set_pull_mode((gpio_num_t)12, GPIO_PULLUP_ONLY);   // D2, needed in 4-line mode only ****
-    gpio_set_pull_mode((gpio_num_t)13, GPIO_PULLUP_ONLY);   // D3, needed in 4- and 1-line modes
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_CMD, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_CMD, needed in 4- and 1- line modes
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D0, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D0, needed in 4- and 1-line modes
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D1, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D1, needed in 4-line mode only ****
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D2, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D2, needed in 4-line mode only ****
+    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D3, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D3, needed in 4- and 1-line modes
 
     ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
-#else
-    ESP_LOGI(TAG, "Using SPI peripheral");
-
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = PIN_NUM_MOSI,
-        .miso_io_num = PIN_NUM_MISO,
-        .sclk_io_num = PIN_NUM_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4000,
-    };
-    ret = spi_bus_initialize(host.slot, &bus_cfg, SPI_DMA_CHAN);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize bus.");
-        return;
-    }
-
-    // This initializes the slot without card detect (CD) and write protect (WP) signals.
-    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = PIN_NUM_CS;
-    slot_config.host_id = host.slot;
-
-    ret = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_config, &mount_config, &card);
-#endif //USE_SPI_MODE
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
@@ -150,13 +110,39 @@ extern "C" void app_main(void)
 
     // Use POSIX and C standard library functions to work with files.
     // First create a file.
+    // TODO: Check options to assign file to random sector to increase longevity of sd card 
     ESP_LOGI(TAG, "Opening file");
     FILE* f = fopen(MOUNT_POINT"/hello.txt", "w");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open file for writing");
         return;
     }
-    fprintf(f, "Hello %s!\n", card->cid.name);
+
+    uint8_t buffer512[512];
+
+    for(uint16_t i=0; i>512; i++){
+        buffer512[i] = 43;
+    }
+
+    uint8_t buffer1024[1024];
+
+    for(uint16_t i=0; i>1024; i++){
+        buffer1024[i] = 13;
+    }
+
+    for(uint8_t j=0; j<16; j++){
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+        gpio_set_level((gpio_num_t)LOG_PIN, 0);
+        fwrite (buffer512 , sizeof(uint8_t), sizeof(buffer512), f);
+        gpio_set_level((gpio_num_t)LOG_PIN, 1);
+        vTaskDelay(23 / portTICK_PERIOD_MS);
+        gpio_set_level((gpio_num_t)LOG_PIN, 0);
+        fwrite (buffer1024 , sizeof(uint8_t), sizeof(buffer1024), f);
+        gpio_set_level((gpio_num_t)LOG_PIN, 1);
+    }
+
+
+    
     fclose(f);
     ESP_LOGI(TAG, "File written");
 
