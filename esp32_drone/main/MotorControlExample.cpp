@@ -37,26 +37,31 @@ void setup()
     Motors.setup();
 }
 
+void calibrate_throttle()
+{
+    float throttle_high[4] = {100.0, 100.0, 100.0, 100.0};
+    float throttle_low[4] = {0.0, 0.0, 0.0, 0.0};
+    Motors.setThrottle(throttle_high);
+    vTaskDelay(3000 / portTICK_PERIOD_MS);
+    Motors.setThrottle(throttle_low);
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+}
 
 void app_main(void)
 {   
     setup();
-    float throttle[4] = {0.0, 0.0, 0.0, 0.0};
+    calibrate_throttle();
+    float throttle[4];
     while (1)
     {   
-        Motors.setThrottle(throttle);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        for(int ch=0; ch<4; ch++)
+        for(int t=30; t>=0; t-=1)
         {
-            throttle[ch] = 100.0;
-        }
-        Motors.setThrottle(throttle);
-        
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        for(int ch=0; ch<4; ch++)
-        {
-            throttle[ch] = 10.0;
-        }
+            for(int ch=0; ch<4; ch++)
+            {
+            throttle[ch] = (float)t;
+            }
+            Motors.setThrottle(throttle);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }        
     }
-    
 }
