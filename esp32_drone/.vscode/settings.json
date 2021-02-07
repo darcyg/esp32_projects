@@ -17,6 +17,7 @@
     "limits": "c",
     "stdio.h": "c",
     "*.inc": "cpp",
-    "type_traits": "cpp"
+    "type_traits": "cpp",
+    "madgwickahrs.h": "c"
   }
 }

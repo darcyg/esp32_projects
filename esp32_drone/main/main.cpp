@@ -17,6 +17,7 @@
 #include "MPU.hpp"
 #include "mpu/math.hpp"
 #include "mpu/types.hpp"
+#include "MadgwickAHRS.hpp"
 
 
 /* Bus configuration */
@@ -69,7 +70,8 @@ static const char* TAG = "MPU9250";
 
 static void mpuISR(void*);
 static void mpuTask(void*);
-static void printTask(void*);
+// static void printTask(void*);
+// static void get_orientationTask(void*);
 
 xQueueHandle data_queue; 
 
@@ -85,8 +87,7 @@ extern "C" void app_main()
     data_queue = xQueueCreate(10, sizeof(data_frame));
     // Create a task to setup mpu and read sensor data
     xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, nullptr);
-    // Create a task to print angles
-    xTaskCreate(printTask, "printTask", 2 * 2048, nullptr, 0, nullptr);
+
 }
 
 /* Tasks */
@@ -139,17 +140,6 @@ static void mpuTask(void*)
     ESP_ERROR_CHECK(MPU.setSampleRate(kSampleRate));
     ESP_ERROR_CHECK(MPU.setDigitalLowPassFilter(kDLPF));
 
-    // Setup FIFO
-    ESP_ERROR_CHECK(MPU.setFIFOConfig(mpud::FIFO_CFG_ACCEL | mpud::FIFO_CFG_GYRO));
-    ESP_ERROR_CHECK(MPU.setFIFOEnabled(true));
-
-    // Setup Interrupt
-    // set the number of data-ready interrupts of mpu to wait before actually doing something 
-    // this way constantly checking the fifo count isn't necessary
-    uint32_t n_interrupts_wait = (uint32_t)(kFIFOSize/kFIFOPacketSize*0.75);
-    // uint32_t n_interrupts_wait = (uint32_t)(kFIFOSize/kFIFOPacketSize*0.75);
-    printf("n_interrupts_wait: %d\n",n_interrupts_wait);
-
     constexpr gpio_config_t kGPIOConfig{
         .pin_bit_mask = (uint64_t) 0x1 << kInterruptPin,
         .mode         = GPIO_MODE_INPUT,
@@ -162,56 +152,43 @@ static void mpuTask(void*)
     gpio_isr_handler_add((gpio_num_t) kInterruptPin, mpuISR, xTaskGetCurrentTaskHandle());
     ESP_ERROR_CHECK(MPU.setInterruptConfig(kInterruptConfig));
     ESP_ERROR_CHECK(MPU.setInterruptEnabled(mpud::INT_EN_RAWDATA_READY));
-
-    // Ready to start reading
-    ESP_ERROR_CHECK(MPU.resetFIFO());  // start clean
     
     uint32_t notificationValue = 0;  // n notifications. Increased from ISR; reset from this task
+    
+    mpud::raw_axes_t accelRaw;  // accel raw axes 
+    mpud::raw_axes_t gyroRaw;  // gyro raw axes 
+    mpud::float_axes_t accelG;   // accel axes in (g) gravity format
+    mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
+    float dt_s = 1.0/kSampleRate;  // delta t in seconds (TODO: make more exact with reading the time between interrupts)
     // Reading Loop
     while (true) {
         // Wait for notification from mpuISR
         xTaskNotifyWait(0, 0, &notificationValue, portMAX_DELAY);
-        if (notificationValue < (n_interrupts_wait-1)) { 
-            // ESP_LOGW(TAG, "Task Notification value: %d", notificationValue);
+        if (notificationValue > 1) { 
+            ESP_LOGE(TAG, "Something went too slowly. ISR notfication value: %d", notificationValue);
             continue;
         }
-        // ESP_LOGW(TAG, "Task Notification value: %d", notificationValue);
-        // now it's getting serious. FIFO is almost as full as we want it to be to read from it
-        // wait one more interrupt, then clear the task notification 
         notificationValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        // Check FIFO count
-        uint16_t fifocount = MPU.getFIFOCount();
-        if (esp_err_t err = MPU.lastError()) {
-            ESP_LOGE(TAG, "Error reading fifo count, %#X", err);
-            MPU.resetFIFO();
-            continue;
-        }
-        // ESP_LOGI(TAG, "FIFO count: %d", fifocount);
-        if ((fifocount % kFIFOPacketSize)) {
-            ESP_LOGE(TAG, "FIFO Count misaligned! Expected: %d, Actual: %d", kFIFOPacketSize, fifocount);
-        }
-        // Burst read data from FIFO
-        uint8_t FIFOpacket[kFIFOSize];
-        if (esp_err_t err = MPU.readFIFO_HS(fifocount, FIFOpacket)) {
-            ESP_LOGE(TAG, "Error reading sensor data, %#X", err);
-            MPU.resetFIFO();
-            continue;
-        }
-        FIFOpacket[510]=fifocount & 0xff;
-        FIFOpacket[511]=(fifocount >> 8);
+        
+        // now it's getting serious. Read new sensor data from registers
+        MPU.motion(&accelRaw, &gyroRaw);
+        // Convert
+        accelG = mpud::accelGravity(accelRaw, kAccelFS);
+        gyroDPS = mpud::gyroDegPerSec(gyroRaw, kGyroFS);
 
-        MPU.resetFIFO();
-        // Format
-        if(xQueueSendToBack(data_queue, (void*) FIFOpacket, 1000/portTICK_RATE_MS)!=pdTRUE){
-            ESP_LOGE(TAG, "Writing to queue faled. \n");
-        }
-        else{
-            // ESP_LOGI(TAG, "FIFOpacket written to queue.");
-        }
+        // Format and print
+        // ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
+
+        ESP_LOGI(TAG, "\t q0: %+6.2f \t q1: %+6.2f \t q2: %+6.2f \t q3: %+7.2f ", q0, q1, q2, q3);
+        MadgwickAHRSupdateIMU(gyroDPS.x, gyroDPS.y, gyroDPS.z, accelG.x, accelG.y, accelG.z, dt_s);
+        
+
+
     }
     vTaskDelete(nullptr);
 }
 
+/*
 static void printTask(void*)
 {
     // vTaskDelay(2000 / portTICK_PERIOD_MS);
@@ -245,6 +222,7 @@ static void printTask(void*)
         vTaskDelay(50 / portTICK_PERIOD_MS);
     }
 }
+*/
 
 static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
 {
@@ -252,3 +230,20 @@ static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
     vTaskNotifyGiveFromISR(taskHandle, &HPTaskWoken);
     if (HPTaskWoken == pdTRUE) portYIELD_FROM_ISR();
 }
+
+
+/* placeholder tasks
+static void flightTask(void*)
+{   
+    GetOrientation();  // Get the current orientation (euler angles) of the quadcopter 
+    GetControlls();  // Get the desired orientation of the quadcopter 
+    PID();  // Controll the desired orientation 
+    UpdateESC();  // Update the 
+    
+    // Helper functions: 
+    GetState();  // Get the current state of the ESCs (i.e. current throttle for each ESC) 
+    SingleReadIMU();  // Read Accel and Gyro Registers 
+    
+
+}
+*/
