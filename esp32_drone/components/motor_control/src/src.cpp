@@ -73,6 +73,12 @@ int ch;
 
 esp_err_t MotorControl::calibrate()
 {
+    float throttle_high[4] = {100.0, 100.0, 100.0, 100.0};
+    float throttle_low[4] = {0.0, 0.0, 0.0, 0.0};
+    setThrottle(throttle_high);
+    vTaskDelay(3000 / portTICK_PERIOD_MS);
+    setThrottle(throttle_low);
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
     return ESP_OK;
 }
 

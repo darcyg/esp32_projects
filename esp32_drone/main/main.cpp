@@ -21,11 +21,15 @@
 #include "nvs_flash.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
+// #include "addr_from_stdin.h"
+#include "lwip/err.h"
+#include "lwip/sockets.h"
 
 #include "MPU.hpp"
 #include "mpu/math.hpp"
 #include "mpu/types.hpp"
 #include "MadgwickAHRS.hpp"
+#include "motor_control.hpp"
 
 
 /* Bus configuration */
@@ -54,7 +58,7 @@ void mpu_spi_post_transfer_callback(spi_transaction_t *t)
 /* MPU configuration */
 
 static constexpr int kInterruptPin         = 34;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 50;  // Hz
+static constexpr uint16_t kSampleRate      = 10;  // Hz
 static constexpr mpud::accel_fs_t kAccelFS = mpud::ACCEL_FS_4G;
 static constexpr mpud::gyro_fs_t kGyroFS   = mpud::GYRO_FS_500DPS;
 static constexpr mpud::dlpf_t kDLPF        = mpud::DLPF_98HZ;
@@ -79,11 +83,20 @@ static void mpuTask(void*);
 // static void get_orientationTask(void*);
 
 
+// MOTOR OBJECT
+MotorControl Motors; 
+
 // WIFI STUFF 
 /* Signal Wi-Fi events on this event-group */
+
+#define HOST_IP_ADDR "192.168.178.68"
+#define PORT 3333
+static const char *payload = "Message from ESP32";
+
 const int WIFI_CONNECTED_EVENT = BIT0;
 static EventGroupHandle_t wifi_event_group;
 
+static void tcp_client_task(void *pvParameters);
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 static void wifi_init_sta(void);
 static void get_device_service_name(char *service_name, size_t max);
@@ -95,20 +108,25 @@ xQueueHandle data_queue;
 // Main
 extern "C" void app_main()
 {
-    ESP_LOGI(TAG, "$ MPU Driver Example: Advanced\n");
+    ESP_LOGI(TAG, "$ Drone Stuff going on!!!\n");
+
+    // Initialize Motor ESCs 
+    Motors.setup();
+    // Motors.calibrate(); 
 
     // provision WiFi and connect 
     provision_wifi();
 
     // Initialize bus through either the Library API or esp-idf API
     spi.begin(MOSI, MISO, SCLK);
+    
+    // Create a queue to store orientation readings 
+    extern volatile float quaternion_frame[4];
+    data_queue = xQueueCreate(10, sizeof(quaternion_frame));
 
-    // Create a queue to store sensor readings 
-    uint8_t data_frame[kFIFOSize];
-    data_queue = xQueueCreate(10, sizeof(data_frame));
     // Create a task to setup mpu and read sensor data
     xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, nullptr);
-
+    xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
 }
 
 /* Tasks */
@@ -181,6 +199,8 @@ static void mpuTask(void*)
     mpud::float_axes_t accelG;   // accel axes in (g) gravity format
     mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
     float dt_s = 1.0/kSampleRate;  // delta t in seconds (TODO: make more exact with reading the time between interrupts)
+    
+    float QuatPacket[4];
     // Reading Loop
     while (true) {
         // Wait for notification from mpuISR
@@ -190,7 +210,6 @@ static void mpuTask(void*)
             continue;
         }
         notificationValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        
         // now it's getting serious. Read new sensor data from registers
         MPU.motion(&accelRaw, &gyroRaw);
         // Convert
@@ -203,11 +222,92 @@ static void mpuTask(void*)
         // ESP_LOGI(TAG, "\t q0: %+6.2f \t q1: %+6.2f \t q2: %+6.2f \t q3: %+7.2f ", q0, q1, q2, q3);
         MadgwickAHRSupdateIMU(gyroDPS.x, gyroDPS.y, gyroDPS.z, accelG.x, accelG.y, accelG.z, dt_s);
         
-
-
+        QuatPacket[0] = q0;
+        QuatPacket[1] = q1;
+        QuatPacket[2] = q2;
+        QuatPacket[3] = q3;
+        
+        // send data to queue
+        if(xQueueSendToBack(data_queue, (void*) QuatPacket, 1000/portTICK_RATE_MS)!=pdTRUE){
+            ESP_LOGE(TAG, "Writing to queue faled. \n");
+        }
+        else{
+            // ESP_LOGI(TAG, "FIFOpacket written to queue.");
+        }
     }
     vTaskDelete(nullptr);
 }
+
+
+static void tcp_client_task(void *pvParameters)
+{
+    char rx_buffer[128];
+    char host_ip[] = HOST_IP_ADDR;
+    int addr_family = 0;
+    int ip_protocol = 0;
+
+    while (1) {
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_addr.s_addr = inet_addr(host_ip);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(PORT);
+        addr_family = AF_INET;
+        ip_protocol = IPPROTO_IP;
+        int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
+        if (sock < 0) {
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            break;
+        }
+        ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, PORT);
+
+        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6));
+        if (err != 0) {
+            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
+            break;
+        }
+        ESP_LOGI(TAG, "Successfully connected");
+
+        float QuatPacket[4];
+        while (1) {
+            // SEND ORIENTATION DATA 
+            // Read from queue 
+            if(xQueueReceive(data_queue, (void*) QuatPacket, 10000/portTICK_PERIOD_MS)!=pdTRUE){
+                ESP_LOGE(TAG, "Reading from queue faled. \n");
+            }
+            else{
+                // ESP_LOGI(TAG, "\t q0: %+6.2f \t q1: %+6.2f \t q2: %+6.2f \t q3: %+7.2f ", QuatPacket[0], QuatPacket[1], QuatPacket[2], QuatPacket[3]);
+                int err = send(sock, &QuatPacket, sizeof(QuatPacket), 0);
+                if (err < 0) {
+                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                    break;
+                }
+            }
+            /*
+            // RECEIVE DATA 
+            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+            // Error occurred during receiving
+            if (len < 0) {
+                ESP_LOGE(TAG, "recv failed: errno %d", errno);
+                break;
+            }
+            // Data received
+            else {
+                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
+                ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
+                ESP_LOGI(TAG, "%s", rx_buffer);
+            }
+            */
+        }
+
+        if (sock != -1) {
+            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            shutdown(sock, 0);
+            close(sock);
+        }
+    }
+    vTaskDelete(NULL);
+}
+
 
 /*
 static void printTask(void*)
@@ -447,19 +547,3 @@ static void get_device_service_name(char *service_name, size_t max)
              ssid_prefix, eth_mac[3], eth_mac[4], eth_mac[5]);
 }
 
-
-/* placeholder tasks
-static void flightTask(void*)
-{   
-    GetOrientation();  // Get the current orientation (euler angles) of the quadcopter 
-    GetControlls();  // Get the desired orientation of the quadcopter 
-    PID();  // Controll the desired orientation 
-    UpdateESC();  // Update the 
-    
-    // Helper functions: 
-    GetState();  // Get the current state of the ESCs (i.e. current throttle for each ESC) 
-    SingleReadIMU();  // Read Accel and Gyro Registers 
-    
-
-}
-*/
