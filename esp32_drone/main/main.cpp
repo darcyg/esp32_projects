@@ -58,7 +58,7 @@ void mpu_spi_post_transfer_callback(spi_transaction_t *t)
 /* MPU configuration */
 
 static constexpr int kInterruptPin         = 34;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 10;  // Hz
+static constexpr uint16_t kSampleRate      = 500;  // Hz
 static constexpr mpud::accel_fs_t kAccelFS = mpud::ACCEL_FS_4G;
 static constexpr mpud::gyro_fs_t kGyroFS   = mpud::GYRO_FS_500DPS;
 static constexpr mpud::dlpf_t kDLPF        = mpud::DLPF_98HZ;
@@ -91,12 +91,11 @@ MotorControl Motors;
 
 #define HOST_IP_ADDR "192.168.178.68"
 #define PORT 3333
-static const char *payload = "Message from ESP32";
 
 const int WIFI_CONNECTED_EVENT = BIT0;
 static EventGroupHandle_t wifi_event_group;
 
-static void tcp_client_task(void *pvParameters);
+static void udp_send_sensor_data_task(void *pvParameters);
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 static void wifi_init_sta(void);
 static void get_device_service_name(char *service_name, size_t max);
@@ -111,7 +110,7 @@ extern "C" void app_main()
     ESP_LOGI(TAG, "$ Drone Stuff going on!!!\n");
 
     // Initialize Motor ESCs 
-    Motors.setup();
+    // Motors.setup();  // TODO: CAUSES TROUBLE WITH SPI!!!! 
     // Motors.calibrate(); 
 
     // provision WiFi and connect 
@@ -122,11 +121,12 @@ extern "C" void app_main()
     
     // Create a queue to store orientation readings 
     extern volatile float quaternion_frame[4];
-    data_queue = xQueueCreate(10, sizeof(quaternion_frame));
+    data_queue = xQueueCreate(5, sizeof(quaternion_frame));
 
     // Create a task to setup mpu and read sensor data
     xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, nullptr);
-    xTaskCreate(tcp_client_task, "tcp_client", 4096, NULL, 5, NULL);
+    xTaskCreate(udp_send_sensor_data_task, "udp_sensor", 4096, NULL, 5, NULL);
+
 }
 
 /* Tasks */
@@ -198,6 +198,7 @@ static void mpuTask(void*)
     mpud::raw_axes_t gyroRaw;  // gyro raw axes 
     mpud::float_axes_t accelG;   // accel axes in (g) gravity format
     mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
+    mpud::float_axes_t gyroRADS;  // gyro axes in (DPS) º/s format
     float dt_s = 1.0/kSampleRate;  // delta t in seconds (TODO: make more exact with reading the time between interrupts)
     
     float QuatPacket[4];
@@ -214,80 +215,79 @@ static void mpuTask(void*)
         MPU.motion(&accelRaw, &gyroRaw);
         // Convert
         accelG = mpud::accelGravity(accelRaw, kAccelFS);
-        gyroDPS = mpud::gyroDegPerSec(gyroRaw, kGyroFS);
-
-        // Format and print
-        // ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
-
-        // ESP_LOGI(TAG, "\t q0: %+6.2f \t q1: %+6.2f \t q2: %+6.2f \t q3: %+7.2f ", q0, q1, q2, q3);
-        MadgwickAHRSupdateIMU(gyroDPS.x, gyroDPS.y, gyroDPS.z, accelG.x, accelG.y, accelG.z, dt_s);
+        // gyroDPS = mpud::gyroDegPerSec(gyroRaw, kGyroFS);
+        gyroRADS = mpud::gyroRadPerSec(gyroRaw, kGyroFS);
+        
+        // TODO: CHECK AXIS ORIENTATION!!! 
+        MadgwickAHRSupdateIMU(gyroRADS.x, -gyroRADS.y, -gyroRADS.z, accelG.x, -accelG.y, -accelG.z, dt_s);
         
         QuatPacket[0] = q0;
         QuatPacket[1] = q1;
         QuatPacket[2] = q2;
         QuatPacket[3] = q3;
-        
+
         // send data to queue
         if(xQueueSendToBack(data_queue, (void*) QuatPacket, 1000/portTICK_RATE_MS)!=pdTRUE){
             ESP_LOGE(TAG, "Writing to queue faled. \n");
-        }
-        else{
-            // ESP_LOGI(TAG, "FIFOpacket written to queue.");
         }
     }
     vTaskDelete(nullptr);
 }
 
 
-static void tcp_client_task(void *pvParameters)
+static void udp_send_sensor_data_task(void *pvParameters)
 {
-    char rx_buffer[128];
-    char host_ip[] = HOST_IP_ADDR;
-    int addr_family = 0;
-    int ip_protocol = 0;
-
+    
     while (1) {
         struct sockaddr_in dest_addr;
-        dest_addr.sin_addr.s_addr = inet_addr(host_ip);
+        dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
         dest_addr.sin_family = AF_INET;
         dest_addr.sin_port = htons(PORT);
-        addr_family = AF_INET;
-        ip_protocol = IPPROTO_IP;
-        int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
+        int addr_family = AF_INET;
+        int ip_protocol = IPPROTO_IP;
+
+
+        int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
         if (sock < 0) {
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
             break;
         }
-        ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, PORT);
-
-        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6));
-        if (err != 0) {
-            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
-            break;
-        }
-        ESP_LOGI(TAG, "Successfully connected");
-
-        float QuatPacket[4];
+        ESP_LOGI(TAG, "Socket created, sending to %s:%d", HOST_IP_ADDR, PORT);
+        uint8_t i = 0; 
+        float QuatPackage[40];
         while (1) {
-            // SEND ORIENTATION DATA 
-            // Read from queue 
-            if(xQueueReceive(data_queue, (void*) QuatPacket, 10000/portTICK_PERIOD_MS)!=pdTRUE){
+            float quaternion_frame[4];
+            // Check sensor_data_queue and read package/s 
+            if(xQueueReceive(data_queue, (void*) quaternion_frame, 10000/portTICK_PERIOD_MS)!=pdTRUE){
                 ESP_LOGE(TAG, "Reading from queue faled. \n");
             }
-            else{
-                // ESP_LOGI(TAG, "\t q0: %+6.2f \t q1: %+6.2f \t q2: %+6.2f \t q3: %+7.2f ", QuatPacket[0], QuatPacket[1], QuatPacket[2], QuatPacket[3]);
-                int err = send(sock, &QuatPacket, sizeof(QuatPacket), 0);
+            QuatPackage[(i*4)+0] = quaternion_frame[0];
+            QuatPackage[(i*4)+1] = quaternion_frame[1];
+            QuatPackage[(i*4)+2] = quaternion_frame[2];
+            QuatPackage[(i*4)+3] = quaternion_frame[3];
+
+            if (i==9){
+                // Send package to host 
+                int err = sendto(sock, QuatPackage, sizeof(QuatPackage), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
                 if (err < 0) {
                     ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     break;
                 }
+                i = 0; 
             }
+            else{
+                i++;
+            }
+            
+            
             /*
-            // RECEIVE DATA 
-            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+            struct sockaddr_in source_addr; // Large enough for both IPv4 or IPv6
+            socklen_t socklen = sizeof(source_addr);
+            int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
+
             // Error occurred during receiving
             if (len < 0) {
-                ESP_LOGE(TAG, "recv failed: errno %d", errno);
+                ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
                 break;
             }
             // Data received
@@ -295,6 +295,10 @@ static void tcp_client_task(void *pvParameters)
                 rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
                 ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
                 ESP_LOGI(TAG, "%s", rx_buffer);
+                if (strncmp(rx_buffer, "OK: ", 4) == 0) {
+                    ESP_LOGI(TAG, "Received expected message, reconnecting");
+                    break;
+                }
             }
             */
         }
