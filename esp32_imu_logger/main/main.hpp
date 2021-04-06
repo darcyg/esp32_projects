@@ -73,3 +73,38 @@ static const char* get_filename();
 TaskHandle_t mpu_task_handle = NULL; 
 TaskHandle_t print_task_handle = NULL; 
 xQueueHandle data_queue; 
+
+// WIFI STUFF 
+/* Signal Wi-Fi events on this event-group */
+
+#define HOST_IP_ADDR "192.168.178.68"
+#define PORT 3333
+
+#define MULTICAST_TTL 1
+
+#define MULTICAST_IPV4_ADDR "224.3.29.71"
+#define UDP_PORT 10000
+
+static const char *V4TAG = "mcast-ipv4";
+
+const int WIFI_CONNECTED_EVENT = BIT0;
+static EventGroupHandle_t wifi_event_group;
+
+static void udp_send_sensor_data_task(void *pvParameters);
+
+static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
+
+static void wifi_init_sta(void);
+
+static void get_device_service_name(char *service_name, size_t max);
+
+esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ssize_t inlen, uint8_t **outbuf, ssize_t *outlen, void *priv_data);
+
+static void provision_wifi();
+
+static void mcast_example_task(void *pvParameters); 
+
+static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if);
+
+static int create_multicast_ipv4_socket(void);
+

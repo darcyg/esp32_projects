@@ -18,6 +18,16 @@
     "stdio.h": "c",
     "*.inc": "cpp",
     "type_traits": "cpp",
-    "madgwickahrs.h": "c"
-  }
+    "madgwickahrs.h": "c",
+    "array": "cpp",
+    "*.tcc": "cpp",
+    "deque": "cpp",
+    "string": "cpp",
+    "unordered_map": "cpp",
+    "vector": "cpp",
+    "string_view": "cpp",
+    "memory": "cpp",
+    "initializer_list": "cpp"
+  },
+  "cmake.configureOnOpen": true
 }
