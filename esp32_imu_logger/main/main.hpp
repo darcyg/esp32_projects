@@ -14,6 +14,7 @@ static constexpr uint32_t CLOCK_SPEED_LOW = 1*1000*1000;  // 1MHz
 static constexpr uint32_t CLOCK_SPEED_HIGH = 10*1000*1000;  // 10MHz
 
 static constexpr int LOG_PIN          = 33;
+static constexpr int SYNC_PIN         = 17;
 
 
 void mpu_spi_pre_transfer_callback(spi_transaction_t *t)

@@ -614,6 +614,11 @@ static void udp_send_sensor_data_task(void *pvParameters)
 static void mcast_example_task(void *pvParameters)
 {
     while (1) {
+        
+        gpio_set_direction((gpio_num_t)SYNC_PIN, GPIO_MODE_INPUT_OUTPUT);
+        gpio_set_level((gpio_num_t)SYNC_PIN, 1);
+        bool sync_status;
+
         int sock;
 
         sock = create_multicast_ipv4_socket();
@@ -654,6 +659,8 @@ static void mcast_example_task(void *pvParameters)
             }
             else if (s > 0) {
                 if (FD_ISSET(sock, &rfds)) {
+                    sync_status = (bool)gpio_get_level((gpio_num_t)SYNC_PIN);
+                    gpio_set_level((gpio_num_t)SYNC_PIN, !sync_status);
                     // Incoming datagram received
                     char recvbuf[48];
                     char raddr_name[32] = { 0 };
@@ -677,7 +684,9 @@ static void mcast_example_task(void *pvParameters)
                     ESP_LOGI(TAG, "received %d bytes from %s:", len, raddr_name);
 
                     recvbuf[len] = 0; // Null-terminate whatever we received and treat like a string...
-                    ESP_LOGI(TAG, "%s", recvbuf);
+                    
+                    ESP_LOGI(TAG, "%s; %d", recvbuf, sync_status);
+
                 }
             }
         /*    
