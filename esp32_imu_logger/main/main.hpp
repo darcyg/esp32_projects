@@ -1,3 +1,5 @@
+#ifndef MAIN_HPP
+#define MAIN_HPP
 
 /* Bus configuration */
 
@@ -109,3 +111,4 @@ static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if);
 
 static int create_multicast_ipv4_socket(void);
 
+#endif
