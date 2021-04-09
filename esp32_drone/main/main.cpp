@@ -4,26 +4,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/param.h>
+#include <sys/time.h>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "esp_err.h"
-#include "esp_log.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
-#include "sdkconfig.h"
 
+#include "esp_system.h"
+#include "esp_err.h"
+#include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
+#include "esp_netif.h"
+
+#include "sdkconfig.h"
 #include "nvs_flash.h"
+
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
-// #include "addr_from_stdin.h"
+
 #include "lwip/err.h"
 #include "lwip/sockets.h"
+#include "lwip/sys.h"
+#include <lwip/netdb.h>
+// #include "addr_from_stdin.h"
+
 
 #include "MPU.hpp"
 #include "mpu/math.hpp"
@@ -31,78 +42,7 @@
 #include "MadgwickAHRS.hpp"
 #include "motor_control.hpp"
 
-
-/* Bus configuration */
-
-#include "SPIbus.hpp"
-static SPI_t& spi                     = vspi;  // hspi or vspi
-static constexpr int MOSI             = 23;
-static constexpr int MISO             = 19;
-static constexpr int SCLK             = 18;
-static constexpr int CS               = 5;
-static constexpr uint32_t CLOCK_SPEED_LOW = 1*1000*1000;  // 1MHz
-static constexpr uint32_t CLOCK_SPEED_HIGH = 10*1000*1000;  // 10MHz
-
-
-void mpu_spi_pre_transfer_callback(spi_transaction_t *t)
-{
-    gpio_set_level((gpio_num_t)CS, 0);
-}
-
-void mpu_spi_post_transfer_callback(spi_transaction_t *t)
-{
-    gpio_set_level((gpio_num_t)CS, 1);
-}
-
-
-/* MPU configuration */
-
-static constexpr int kInterruptPin         = 34;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 500;  // Hz
-static constexpr mpud::accel_fs_t kAccelFS = mpud::ACCEL_FS_4G;
-static constexpr mpud::gyro_fs_t kGyroFS   = mpud::GYRO_FS_500DPS;
-static constexpr mpud::dlpf_t kDLPF        = mpud::DLPF_98HZ;
-static constexpr mpud::int_config_t kInterruptConfig{
-    .level = mpud::INT_LVL_ACTIVE_HIGH,
-    .drive = mpud::INT_DRV_PUSHPULL,
-    .mode  = mpud::INT_MODE_PULSE50US,
-    .clear = mpud::INT_CLEAR_STATUS_REG  //
-};
-
-// FIFO
-constexpr uint16_t kFIFOPacketSize = 12;  // in Byte
-constexpr uint16_t kFIFOSize = 512;  // in Byte
-
-/*-*/
-
-static const char* TAG = "MPU9250";
-
-static void mpuISR(void*);
-static void mpuTask(void*);
-// static void printTask(void*);
-// static void get_orientationTask(void*);
-
-
-// MOTOR OBJECT
-MotorControl Motors; 
-
-// WIFI STUFF 
-/* Signal Wi-Fi events on this event-group */
-
-#define HOST_IP_ADDR "192.168.178.68"
-#define PORT 3333
-
-const int WIFI_CONNECTED_EVENT = BIT0;
-static EventGroupHandle_t wifi_event_group;
-
-static void udp_send_sensor_data_task(void *pvParameters);
-static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
-static void wifi_init_sta(void);
-static void get_device_service_name(char *service_name, size_t max);
-esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ssize_t inlen, uint8_t **outbuf, ssize_t *outlen, void *priv_data);
-static void provision_wifi();
-
-xQueueHandle data_queue; 
+#include "main.hpp"
 
 // Main
 extern "C" void app_main()
@@ -110,8 +50,12 @@ extern "C" void app_main()
     ESP_LOGI(TAG, "$ Drone Stuff going on!!!\n");
 
     // Initialize Motor ESCs 
+    ESP_LOGI(TAG, "$ Setting up motor controller \n");
     // Motors.setup();  // TODO: CAUSES TROUBLE WITH SPI!!!! 
+    ESP_LOGI(TAG, "$ Motor controller setup done \n");
+    ESP_LOGI(TAG, "$ Calibrating motor controller \n");
     // Motors.calibrate(); 
+    ESP_LOGI(TAG, "$ Motor controller calibrated \n");
 
     // provision WiFi and connect 
     provision_wifi();
@@ -120,12 +64,15 @@ extern "C" void app_main()
     spi.begin(MOSI, MISO, SCLK);
     
     // Create a queue to store orientation readings 
-    extern volatile float quaternion_frame[4];
-    data_queue = xQueueCreate(5, sizeof(quaternion_frame));
+    extern volatile float data_frame[6];
+    extern volatile float quat_frame[4];
+    data_queue = xQueueCreate(10, sizeof(data_frame));
+    quat_queue = xQueueCreate(10, sizeof(quat_frame));
 
     // Create a task to setup mpu and read sensor data
     xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, nullptr);
     xTaskCreate(udp_send_sensor_data_task, "udp_sensor", 4096, NULL, 5, NULL);
+    // xTaskCreate(udp_receive_throttle_task, "udp_motor", 4096, NULL, 5, NULL);
 
 }
 
@@ -170,7 +117,7 @@ static void mpuTask(void*)
     // Calibrate
     mpud::raw_axes_t accelBias, gyroBias;
     ESP_ERROR_CHECK(MPU.computeOffsets(&accelBias, &gyroBias));
-    ESP_ERROR_CHECK(MPU.setAccelOffset(accelBias));
+    // ESP_ERROR_CHECK(MPU.setAccelOffset(accelBias));
     ESP_ERROR_CHECK(MPU.setGyroOffset(gyroBias));
 
     // Configure
@@ -202,6 +149,7 @@ static void mpuTask(void*)
     float dt_s = 1.0/kSampleRate;  // delta t in seconds (TODO: make more exact with reading the time between interrupts)
     
     float QuatPacket[4];
+    float DataPacket[6];
     // Reading Loop
     while (true) {
         // Wait for notification from mpuISR
@@ -215,20 +163,33 @@ static void mpuTask(void*)
         MPU.motion(&accelRaw, &gyroRaw);
         // Convert
         accelG = mpud::accelGravity(accelRaw, kAccelFS);
-        // gyroDPS = mpud::gyroDegPerSec(gyroRaw, kGyroFS);
+        gyroDPS = mpud::gyroDegPerSec(gyroRaw, kGyroFS);
         gyroRADS = mpud::gyroRadPerSec(gyroRaw, kGyroFS);
         
         // TODO: CHECK AXIS ORIENTATION!!! 
-        MadgwickAHRSupdateIMU(gyroRADS.x, -gyroRADS.y, -gyroRADS.z, accelG.x, -accelG.y, -accelG.z, dt_s);
+        // MadgwickAHRSupdateIMU(gyroRADS.x, gyroRADS.y, gyroRADS.z, accelG.x, accelG.y, accelG.z, dt_s);
         
+        // ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
+
+        DataPacket[0] = accelG.x;
+        DataPacket[1] = accelG.y;
+        DataPacket[2] = accelG.z;  
+        DataPacket[3] = gyroDPS.x;
+        DataPacket[4] = gyroDPS.y;
+        DataPacket[5] = gyroDPS.z;
+        // send data to queue
+        if(xQueueSendToBack(data_queue, (void*) DataPacket, 1000/portTICK_RATE_MS)!=pdTRUE){
+            ESP_LOGE(TAG, "Writing to data_queue faled. \n");
+        /*
         QuatPacket[0] = q0;
         QuatPacket[1] = q1;
         QuatPacket[2] = q2;
         QuatPacket[3] = q3;
-
-        // send data to queue
-        if(xQueueSendToBack(data_queue, (void*) QuatPacket, 1000/portTICK_RATE_MS)!=pdTRUE){
-            ESP_LOGE(TAG, "Writing to queue faled. \n");
+        // send quaternions to queue
+        if(xQueueSendToBack(quat_queue, (void*) QuatPacket, 1000/portTICK_RATE_MS)!=pdTRUE){
+            ESP_LOGE(TAG, "Writing to quat_queue faled. \n");
+        }
+        */
         }
     }
     vTaskDelete(nullptr);
@@ -255,20 +216,35 @@ static void udp_send_sensor_data_task(void *pvParameters)
         ESP_LOGI(TAG, "Socket created, sending to %s:%d", HOST_IP_ADDR, PORT);
         uint8_t i = 0; 
         float QuatPackage[40];
+        float DataPackage[60];
         while (1) {
             float quaternion_frame[4];
+            float data_frame[6];
+
             // Check sensor_data_queue and read package/s 
-            if(xQueueReceive(data_queue, (void*) quaternion_frame, 10000/portTICK_PERIOD_MS)!=pdTRUE){
+            if(xQueueReceive(data_queue, (void*) data_frame, 10000/portTICK_PERIOD_MS)!=pdTRUE){
+                ESP_LOGE(TAG, "Reading from queue faled. \n");
+            }
+            DataPackage[(i*6)+0] = data_frame[0];
+            DataPackage[(i*6)+1] = data_frame[1];
+            DataPackage[(i*6)+2] = data_frame[2];
+            DataPackage[(i*6)+3] = data_frame[3];
+            DataPackage[(i*6)+4] = data_frame[4];
+            DataPackage[(i*6)+5] = data_frame[5];
+            /*
+            // Check quaternion_queue and read package/s 
+            if(xQueueReceive(quat_queue, (void*) quaternion_frame, 10000/portTICK_PERIOD_MS)!=pdTRUE){
                 ESP_LOGE(TAG, "Reading from queue faled. \n");
             }
             QuatPackage[(i*4)+0] = quaternion_frame[0];
             QuatPackage[(i*4)+1] = quaternion_frame[1];
             QuatPackage[(i*4)+2] = quaternion_frame[2];
             QuatPackage[(i*4)+3] = quaternion_frame[3];
-
+            */
+            
             if (i==9){
                 // Send package to host 
-                int err = sendto(sock, QuatPackage, sizeof(QuatPackage), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+                int err = sendto(sock, DataPackage, sizeof(DataPackage), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
                 if (err < 0) {
                     ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     break;
@@ -312,42 +288,6 @@ static void udp_send_sensor_data_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-
-/*
-static void printTask(void*)
-{
-    // vTaskDelay(2000 / portTICK_PERIOD_MS);
-    while (true) {
-        uint8_t FIFOpacket[kFIFOSize];
-        mpud::raw_axes_t rawAccel;
-        mpud::raw_axes_t rawGyro;
-        mpud::float_axes_t accelG;   // accel axes in (g) gravity format
-        mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
-        if(xQueueReceive(data_queue, (void*) FIFOpacket, 10000/portTICK_PERIOD_MS)!=pdTRUE){
-            ESP_LOGE(TAG, "Reading from queue faled. \n");
-        }
-        else{
-            // ESP_LOGI(TAG, "Successfully read data package from queue.");
-            uint16_t fifocount; 
-            fifocount = ((uint16_t)FIFOpacket[511] << 8) | FIFOpacket[510]; 
-            // ESP_LOGI(TAG, "fifocount read: %d", fifocount);
-            for(uint16_t i = 0; i < fifocount;i+=kFIFOPacketSize){
-                // ESP_LOGI(TAG, "Packet Nb.: %d", i);
-                rawAccel.x = FIFOpacket[i] << 8 | FIFOpacket[i+1];
-                rawAccel.y = FIFOpacket[i+2] << 8 | FIFOpacket[i+3];
-                rawAccel.z = FIFOpacket[i+4] << 8 | FIFOpacket[i+5];
-                rawGyro.x  = FIFOpacket[i+6] << 8 | FIFOpacket[i+7];
-                rawGyro.y  = FIFOpacket[i+8] << 8 | FIFOpacket[i+9];
-                rawGyro.z  = FIFOpacket[i+10] << 8 | FIFOpacket[i+11];
-                accelG = mpud::accelGravity(rawAccel, mpud::ACCEL_FS_4G);
-                gyroDPS = mpud::gyroDegPerSec(rawGyro, mpud::GYRO_FS_500DPS);
-                ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
-            }
-        }
-        vTaskDelay(50 / portTICK_PERIOD_MS);
-    }
-}
-*/
 
 static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
 {
@@ -551,3 +491,85 @@ static void get_device_service_name(char *service_name, size_t max)
              ssid_prefix, eth_mac[3], eth_mac[4], eth_mac[5]);
 }
 
+static void udp_receive_throttle_task(void *pvParameters)
+{
+    char rx_buffer[128];
+    char host_ip[] = HOST_IP_ADDR;
+    int addr_family = 0;
+    int ip_protocol = 0;
+    static const char *payload = "Ready!";
+
+    while (1) {
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(REMOTE_CONTROL_PORT);
+        addr_family = AF_INET;
+        ip_protocol = IPPROTO_IP;
+
+        int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
+        if (sock < 0) {
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            break;
+        }
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+            ESP_LOGE(TAG, "Unable to set socket option: errno %d", errno);
+        }
+
+
+        ESP_LOGI(TAG, "Socket created, sending to %s:%d", HOST_IP_ADDR, REMOTE_CONTROL_PORT);
+
+        while (1) {
+
+            int err = sendto(sock, payload, strlen(payload), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+            if (err < 0) {
+                ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                break;
+            }
+            ESP_LOGI(TAG, "Message sent");
+
+
+            struct sockaddr_storage source_addr; // Large enough for both IPv4 or IPv6
+            socklen_t socklen = sizeof(source_addr);
+            int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
+
+            // Error occurred during receiving
+            if (len < 0) {
+                ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+                // break;
+            }
+            // Data received
+            else {
+                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
+                ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
+                ESP_LOGI(TAG, "%s", rx_buffer);
+                float f; 
+                f = (float)atof(rx_buffer);
+                if (strncmp(rx_buffer, "OK: ", 4) == 0) {
+                    ESP_LOGI(TAG, "Received expected message, reconnecting");
+                    break;
+                }
+                else if ((0.0 <= f) && (f <= 100.0))
+                {   
+                    float throttle[4] = {f, f, f, f}; 
+                    Motors.setThrottle(throttle);
+                }
+                else
+                {
+                    ESP_LOGE(TAG, "%s - not a valid throttle value! Must be 0...100.", rx_buffer);
+                }
+                
+            }
+        }
+
+        if (sock != -1) {
+            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            shutdown(sock, 0);
+            close(sock);
+        }
+    }
+    vTaskDelete(NULL);
+}
