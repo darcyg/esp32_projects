@@ -7,7 +7,9 @@
 static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
 {
     BaseType_t HPTaskWoken = pdFALSE;
+    int64_t sys_ticks = esp_timer_get_time();
     vTaskNotifyGiveFromISR(taskHandle, &HPTaskWoken);
+    xQueueSendToBackFromISR(mpu_ticks_queue, &sys_ticks, &HPTaskWoken);
     if (HPTaskWoken == pdTRUE) portYIELD_FROM_ISR();
 }
 
@@ -91,7 +93,8 @@ static void mpuTask(void*)
 
     // Ready to start reading
     ESP_ERROR_CHECK(MPU.resetFIFO());  // start clean
-    
+    xQueueReset(mpu_ticks_queue);
+
     uint32_t notificationValue = 0;  // n notifications. Increased from ISR; reset from this task
     // Reading Loop
     while (true) {
@@ -99,12 +102,14 @@ static void mpuTask(void*)
         xTaskNotifyWait(0, 0, &notificationValue, portMAX_DELAY);
         if (notificationValue < (n_interrupts_wait-1)) { 
             // ESP_LOGW(TAG, "Task Notification value: %d", notificationValue);
+            // ESP_LOGW(TAG, "Ticks count: %d", ticks_count);
             continue;
         }
         // ESP_LOGW(TAG, "Task Notification value: %d", notificationValue);
         // now it's getting serious. FIFO is almost as full as we want it to be to read from it
         // wait one more interrupt, then clear the task notification 
         notificationValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
         // Check FIFO count
         uint16_t fifocount = MPU.getFIFOCount();
         if (esp_err_t err = MPU.lastError()) {
@@ -112,29 +117,37 @@ static void mpuTask(void*)
             MPU.resetFIFO();
             continue;
         }
-        // ESP_LOGI(TAG, "FIFO count: %d", fifocount);
+        // ESP_LOGI(TAG, "FIFO count: %d", fifocount);  max. 512
         if ((fifocount % kFIFOPacketSize)) {
             ESP_LOGE(TAG, "FIFO Count misaligned! Expected: %d, Actual: %d", (kFIFOPacketSize*n_interrupts_wait), fifocount);
             // TODO: Check why this happens and error-handle!!! 
         }
+        // Push data into data_frame 
         // Burst read data from FIFO
-        uint8_t FIFOpacket[kFIFOSize];
-        if (esp_err_t err = MPU.readFIFO_HS(fifocount, FIFOpacket)) {
+        DataFrame data_frame; 
+        if (esp_err_t err = MPU.readFIFO_HS(fifocount, data_frame.SensorReads)) {
             ESP_LOGE(TAG, "Error reading sensor data, %#X", err);
             MPU.resetFIFO();
             continue;
         }
         // write number of bytes read from the fifo to the data packet 
-        // TODO: re-thingk data packet structure to also hold time stamp 
-        FIFOpacket[510]=fifocount & 0xff;
-        FIFOpacket[511]=(fifocount >> 8);
+        data_frame.n_samples = (uint8_t)(fifocount/kFIFOPacketSize); 
 
+        // uint64_t TICKpacket[(int)(kFIFOSize/kFIFOPacketSize)];
+        // data_frame.Timestamps
+        uint8_t i_tick = 0; 
+        // TODO: assert uxQueueMessagesWaiting(mpu_ticks_queue) == data_frame.n_samples
+        while(uxQueueMessagesWaiting(mpu_ticks_queue)){
+            xQueueReceive(mpu_ticks_queue, &data_frame.Timestamps[i_tick], 1000/portTICK_PERIOD_MS);
+            i_tick ++;
+        }
+        
         MPU.resetFIFO();
         // Send data to queue only if measurement is started
         udp_cmd_bits = xEventGroupGetBits(command_event_group); 
 
         if(udp_cmd_bits&StartMeasurement_BIT){
-            if(xQueueSendToBack(data_queue, (void*) FIFOpacket, 1000/portTICK_RATE_MS)!=pdTRUE){
+            if(xQueueSendToBack(data_queue, (void*) &data_frame, 1000/portTICK_RATE_MS)!=pdTRUE){
                 ESP_LOGE(TAG, "Writing to queue faled.");
             }
             else{
@@ -235,55 +248,26 @@ static void write_data_to_sd(void * fn)
     // File created 
     // 
     bool data_written = pdFALSE; 
-
     while (true) {
         // Try to read from queue only if data is being written or there are messages left in the queue
         status_bits = xEventGroupGetBits(command_event_group); 
-        if((status_bits&MPUWriting_BIT) | uxQueueMessagesWaiting(data_queue)){
+        if((status_bits & MPUWriting_BIT) | uxQueueMessagesWaiting(data_queue)){
             data_written = pdTRUE;
-
             // Write data to file 
-            // TODO: 
-            // Bytes 0...507:   sensor reads from fifo (currently only ~0...360 are used -> OPTIMIZTION POTENTIAL)
-            // Bytes 508, 509:  timestamp (of the last MPU-interrupt?!) 
-            // Bytes 510, 511:  fifo byte count 
-            // ----> 4 of these packets per fwrite
-            uint8_t FIFOpacket[kFIFOSize];
-            mpud::raw_axes_t rawAccel;
-            mpud::raw_axes_t rawGyro;
-            mpud::float_axes_t accelG;   // accel axes in (g) gravity format
-            mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
-
-            if(xQueueReceive(data_queue, (void*) FIFOpacket, 1000/portTICK_PERIOD_MS)!=pdTRUE){
+            DataFrame data_frame;
+            if(xQueueReceive(data_queue, &data_frame, 1000/portTICK_PERIOD_MS)!=pdTRUE){
                 ESP_LOGE(TAG, "Reading from queue faled. \n");
             }
             else{
-                ESP_LOGI(TAG, "Successfully read data package from queue.");
-                uint16_t fifocount; 
-                fifocount = ((uint16_t)FIFOpacket[511] << 8) | FIFOpacket[510]; 
-                // ESP_LOGI(TAG, "fifocount read: %d", fifocount);
+                ESP_LOGI(TAG, "Successfully read data package from queue. n_samples: %d", data_frame.n_samples);
                 gpio_set_level((gpio_num_t)LOG_PIN, 0);
-                fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), active_file);
-                for(uint16_t i = 0; i < fifocount;i+=kFIFOPacketSize){
-                    /*
-                    ESP_LOGI(TAG, "Packet Nb.: %d", i);
-                    rawAccel.x = FIFOpacket[i] << 8 | FIFOpacket[i+1];
-                    rawAccel.y = FIFOpacket[i+2] << 8 | FIFOpacket[i+3];
-                    rawAccel.z = FIFOpacket[i+4] << 8 | FIFOpacket[i+5];
-                    rawGyro.x  = FIFOpacket[i+6] << 8 | FIFOpacket[i+7];
-                    rawGyro.y  = FIFOpacket[i+8] << 8 | FIFOpacket[i+9];
-                    rawGyro.z  = FIFOpacket[i+10] << 8 | FIFOpacket[i+11];
-                    accelG = mpud::accelGravity(rawAccel, mpud::ACCEL_FS_4G);
-                    gyroDPS = mpud::gyroDegPerSec(rawGyro, mpud::GYRO_FS_500DPS);
-                    ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
-                    */
-                }
+                // fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), active_file);
+                fwrite (&data_frame , sizeof(struct DataSample6Axis), data_frame.n_samples, active_file);
                 gpio_set_level((gpio_num_t)LOG_PIN, 1);
             }
         }
         else{
-            ESP_LOGW(TAG, "Not writing data. data_written: %i", data_written);
-            // TODO: Read the remaining queue elements!!! 
+            // ESP_LOGW(TAG, "Not writing data. data_written: %i", data_written);
             if(data_written){
                 fclose(active_file);
                 ESP_LOGI(TAG, "File closed. Deleting Task...");
@@ -622,8 +606,6 @@ static void udp_rx_commands_task(void * fn)
                 rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
                 ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
                 ESP_LOGI(TAG, "%s", rx_buffer);
-                float f; 
-                f = (float)atof(rx_buffer);
                 if (strncmp(rx_buffer, "Start", 5) == 0) {
                     ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
                     xEventGroupSetBits(command_event_group, StartMeasurement_BIT);
@@ -888,9 +870,9 @@ extern "C" void app_main()
     // Initialize bus through either the Library API or esp-idf API
     spi.begin(MOSI, MISO, SCLK);
 
-    // Create a queue to store sensor readings 
-    uint8_t data_frame[kFIFOSize];
-    data_queue = xQueueCreate(10, sizeof(data_frame));
+    // Create queues to store sensor readings and system ticks of the readings 
+    data_queue = xQueueCreate(5, sizeof(DataFrame));
+    mpu_ticks_queue = xQueueCreate(kFIFOReadsMax, sizeof(int64_t));
     
     // Create UDP Multicast task for syncing 
     xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 5, NULL);

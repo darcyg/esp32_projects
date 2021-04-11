@@ -71,7 +71,7 @@ void mpu_spi_post_transfer_callback(spi_transaction_t *t)
 /* MPU configuration */
 
 static constexpr int kInterruptPin         = 34;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 50;  // Hz
+static constexpr uint16_t kSampleRate      = 100;  // Hz
 static constexpr mpud::accel_fs_t kAccelFS = mpud::ACCEL_FS_4G;
 static constexpr mpud::gyro_fs_t kGyroFS   = mpud::GYRO_FS_500DPS;
 static constexpr mpud::dlpf_t kDLPF        = mpud::DLPF_98HZ;
@@ -85,6 +85,7 @@ static constexpr mpud::int_config_t kInterruptConfig{
 // FIFO
 constexpr uint16_t kFIFOPacketSize = 12;  // in Byte
 constexpr uint16_t kFIFOSize = 512;  // in Byte
+constexpr uint8_t kFIFOReadsMax = (uint8_t)(kFIFOSize/kFIFOPacketSize); 
 
 /*-*/
 
@@ -101,19 +102,34 @@ static constexpr int PIN_NUM_SD_D3             = 13;
 #define MOUNT_POINT "/sdcard"
 
 xQueueHandle data_queue; 
+xQueueHandle timestamp_queue; 
+xQueueHandle mpu_ticks_queue;
+
+struct DataFrame 
+{
+    uint8_t     SensorReads[kFIFOSize];
+    uint64_t    Timestamps[kFIFOReadsMax];
+    uint8_t     n_samples;
+};
+
+struct DataSample6Axis 
+{
+    uint8_t     SensorReads[kFIFOPacketSize];
+    uint64_t    Timestamp;
+};
+
 
 // WIFI STUFF 
 /* Signal Wi-Fi events on this event-group */
 
 #define HOST_IP_ADDR "192.168.178.68"
 #define PORT 3333
+#define COMMAND_PORT 3334
 
 #define MULTICAST_TTL 1
 
 #define MULTICAST_IPV4_ADDR "224.3.29.71"
 #define UDP_PORT 10000
-
-#define COMMAND_PORT 3334
 
 static const char *V4TAG = "mcast-ipv4";
 
