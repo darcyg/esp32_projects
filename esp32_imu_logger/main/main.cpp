@@ -1,85 +1,19 @@
-#include <math.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string>
-#include <cstring>
-using namespace std;
-
-#include "esp_system.h"
-#include "esp_wifi.h"
-#include "esp_event.h"
-#include "nvs_flash.h"
-#include "esp_netif.h"
-#include "wifi_provisioning/manager.h"
-#include "wifi_provisioning/scheme_ble.h"
-#include "lwip/err.h"
-#include "lwip/sockets.h"
-#include "lwip/sys.h"
-#include <lwip/netdb.h>
-
-
-#include <sys/unistd.h>
-#include <sys/stat.h>
-#include "sdmmc_cmd.h"
-#include "driver/sdmmc_host.h"
-#include "driver/gpio.h"
-#include "driver/spi_master.h"
-#include "esp_err.h"
-#include "esp_log.h"
-#include "esp_vfs_fat.h"
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/portmacro.h"
-#include "freertos/queue.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
-
-#include "sdkconfig.h"
-
-#include "MPU.hpp"
-#include "mpu/math.hpp"
-#include "mpu/types.hpp"
 
 #include "main.hpp"
 
-// Main
-extern "C" void app_main()
-{
-    ESP_LOGI(TAG, "$ MPU Driver Example: Advanced\n");
-    // mount_sd_card();
-    ESP_LOGI(TAG, "$ SD card initialized\n");
-
-    // provision WiFi and connect 
-    provision_wifi();
-
-    // Initialize bus through either the Library API or esp-idf API
-    spi.begin(MOSI, MISO, SCLK);
-
-    // Create a queue to store sensor readings 
-    uint8_t data_frame[kFIFOSize];
-    data_queue = xQueueCreate(10, sizeof(data_frame));
-    
-    // Create UDP Multicast task for syncing 
-    xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 5, NULL);
-
-
-    // Create a task to setup mpu and read sensor data
-    // xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, &mpu_task_handle);
-    
-    // Create a task to print angles
-    const char * filename = get_filename();
-    // xTaskCreate(printTask, "printTask", 2 * 2048, (void*) filename, 0, &print_task_handle);
-
-
-}
 
 /* Tasks */
 
-static MPU_t MPU;
+static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
+{
+    BaseType_t HPTaskWoken = pdFALSE;
+    vTaskNotifyGiveFromISR(taskHandle, &HPTaskWoken);
+    if (HPTaskWoken == pdTRUE) portYIELD_FROM_ISR();
+}
 
 static void mpuTask(void*)
 {   
+    EventBits_t udp_cmd_bits;
     //Initialize non-SPI GPIOs
     gpio_set_direction((gpio_num_t)CS, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)CS, 1);
@@ -119,7 +53,7 @@ static void mpuTask(void*)
     // Calibrate
     mpud::raw_axes_t accelBias, gyroBias;
     ESP_ERROR_CHECK(MPU.computeOffsets(&accelBias, &gyroBias));
-    ESP_ERROR_CHECK(MPU.setAccelOffset(accelBias));
+    // ESP_ERROR_CHECK(MPU.setAccelOffset(accelBias));
     ESP_ERROR_CHECK(MPU.setGyroOffset(gyroBias));
 
     // Configure
@@ -131,13 +65,13 @@ static void mpuTask(void*)
     // Setup FIFO
     ESP_ERROR_CHECK(MPU.setFIFOConfig(mpud::FIFO_CFG_ACCEL | mpud::FIFO_CFG_GYRO));
     ESP_ERROR_CHECK(MPU.setFIFOEnabled(true));
-
-    // Setup Interrupt
+    // # # # # # # # # # # 
+    // Interrupt Setup
+    // # # # # # # # # # # 
     // set the number of data-ready interrupts of mpu to wait before actually doing something 
     // this way constantly checking the fifo count isn't necessary
     uint32_t n_interrupts_wait = (uint32_t)(kFIFOSize/kFIFOPacketSize*0.75);
-    // uint32_t n_interrupts_wait = (uint32_t)(kFIFOSize/kFIFOPacketSize*0.75);
-    printf("n_interrupts_wait: %d\n",n_interrupts_wait);
+    ESP_LOGI(TAG, "n_interrupts_wait: %d\n",n_interrupts_wait);
 
     constexpr gpio_config_t kGPIOConfig{
         .pin_bit_mask = (uint64_t) 0x1 << kInterruptPin,
@@ -151,6 +85,9 @@ static void mpuTask(void*)
     gpio_isr_handler_add((gpio_num_t) kInterruptPin, mpuISR, xTaskGetCurrentTaskHandle());
     ESP_ERROR_CHECK(MPU.setInterruptConfig(kInterruptConfig));
     ESP_ERROR_CHECK(MPU.setInterruptEnabled(mpud::INT_EN_RAWDATA_READY));
+    // # # # # # # # # # # 
+    // END Interrupt Setup 
+    // # # # # # # # # # # 
 
     // Ready to start reading
     ESP_ERROR_CHECK(MPU.resetFIFO());  // start clean
@@ -177,7 +114,7 @@ static void mpuTask(void*)
         }
         // ESP_LOGI(TAG, "FIFO count: %d", fifocount);
         if ((fifocount % kFIFOPacketSize)) {
-            ESP_LOGE(TAG, "FIFO Count misaligned! Expected: %d, Actual: %d", kFIFOPacketSize, fifocount);
+            ESP_LOGE(TAG, "FIFO Count misaligned! Expected: %d, Actual: %d", (kFIFOPacketSize*n_interrupts_wait), fifocount);
             // TODO: Check why this happens and error-handle!!! 
         }
         // Burst read data from FIFO
@@ -187,93 +124,29 @@ static void mpuTask(void*)
             MPU.resetFIFO();
             continue;
         }
+        // write number of bytes read from the fifo to the data packet 
+        // TODO: re-thingk data packet structure to also hold time stamp 
         FIFOpacket[510]=fifocount & 0xff;
         FIFOpacket[511]=(fifocount >> 8);
 
         MPU.resetFIFO();
-        // Format
-        if(xQueueSendToBack(data_queue, (void*) FIFOpacket, 1000/portTICK_RATE_MS)!=pdTRUE){
-            ESP_LOGE(TAG, "Writing to queue faled. \n");
+        // Send data to queue only if measurement is started
+        udp_cmd_bits = xEventGroupGetBits(command_event_group); 
+
+        if(udp_cmd_bits&StartMeasurement_BIT){
+            if(xQueueSendToBack(data_queue, (void*) FIFOpacket, 1000/portTICK_RATE_MS)!=pdTRUE){
+                ESP_LOGE(TAG, "Writing to queue faled.");
+            }
+            else{
+                xEventGroupSetBits(status_event_group, MPUWriting_BIT);
+            }
         }
         else{
-            // ESP_LOGI(TAG, "FIFOpacket written to queue.");
-        }
+            xEventGroupClearBits(status_event_group, MPUWriting_BIT);
+            // ESP_LOGW(TAG, "Measurement not started yet...");
+        }            
     }
     vTaskDelete(nullptr);
-}
-
-static void printTask(void * fn)
-{   
-    // Use POSIX and C standard library functions to work with files.
-    // First create a file.
-    // TODO: Check options to assign file to random sector to increase longevity of sd card 
-    const char* filename = (const char*) fn; 
-    ESP_LOGI(TAG, "Opening file: %s", filename);
-    char filepath[100];
-    strcpy(filepath, MOUNT_POINT); 
-    strcat(filepath, "/");
-    strcat(filepath, filename);
-
-    FILE* f = fopen(filepath, "w");
-    if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
-        return;
-    }
-    //
-    // File created 
-    // 
-    while (true) {
-        // Write data to file 
-        // TODO: 
-        // Bytes 0...507:   sensor reads from fifo (currently only ~0...360 are used -> OPTIMIZTION POTENTIAL)
-        // Bytes 508, 509:  timestamp (of the last MPU-interrupt?!) 
-        // Bytes 510, 511:  fifo byte count 
-        // ----> 4 of these packets per fwrite
-        uint8_t FIFOpacket[kFIFOSize];
-        mpud::raw_axes_t rawAccel;
-        mpud::raw_axes_t rawGyro;
-        mpud::float_axes_t accelG;   // accel axes in (g) gravity format
-        mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
-        if(xQueueReceive(data_queue, (void*) FIFOpacket, 10000/portTICK_PERIOD_MS)!=pdTRUE){
-            ESP_LOGE(TAG, "Reading from queue faled. \n");
-        }
-        else{
-            ESP_LOGI(TAG, "Successfully read data package from queue.");
-            uint16_t fifocount; 
-            fifocount = ((uint16_t)FIFOpacket[511] << 8) | FIFOpacket[510]; 
-            // ESP_LOGI(TAG, "fifocount read: %d", fifocount);
-            gpio_set_level((gpio_num_t)LOG_PIN, 0);
-            fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), f);
-            for(uint16_t i = 0; i < fifocount;i+=kFIFOPacketSize){
-                /*
-                 ESP_LOGI(TAG, "Packet Nb.: %d", i);
-                rawAccel.x = FIFOpacket[i] << 8 | FIFOpacket[i+1];
-                rawAccel.y = FIFOpacket[i+2] << 8 | FIFOpacket[i+3];
-                rawAccel.z = FIFOpacket[i+4] << 8 | FIFOpacket[i+5];
-                rawGyro.x  = FIFOpacket[i+6] << 8 | FIFOpacket[i+7];
-                rawGyro.y  = FIFOpacket[i+8] << 8 | FIFOpacket[i+9];
-                rawGyro.z  = FIFOpacket[i+10] << 8 | FIFOpacket[i+11];
-                accelG = mpud::accelGravity(rawAccel, mpud::ACCEL_FS_4G);
-                gyroDPS = mpud::gyroDegPerSec(rawGyro, mpud::GYRO_FS_500DPS);
-                ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
-                */
-            }
-            gpio_set_level((gpio_num_t)LOG_PIN, 1);
-        }
-        if(false){
-            fclose(f);
-            ESP_LOGI(TAG, "File closed. Deleting PrintTask...");
-            vTaskDelete(print_task_handle);
-        }
-            
-    }
-}
-
-static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
-{
-    BaseType_t HPTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(taskHandle, &HPTaskWoken);
-    if (HPTaskWoken == pdTRUE) portYIELD_FROM_ISR();
 }
 
 static void mount_sd_card(void)
@@ -286,7 +159,7 @@ static void mount_sd_card(void)
     // If format_if_mount_failed is set to true, SD card will be partitioned and
     // formatted in case when mounting fails.
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
+        .format_if_mount_failed = true,
         .max_files = 5,
         .allocation_unit_size = 16 * 1024
     };
@@ -314,8 +187,8 @@ static void mount_sd_card(void)
     gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_CMD, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_CMD, needed in 4- and 1- line modes
     gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D0, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D0, needed in 4- and 1-line modes
     gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D1, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D1, needed in 4-line mode only ****
-    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D2, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D2, needed in 4-line mode only ****
-    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D3, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D3, needed in 4- and 1-line modes
+    // gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D2, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D2, needed in 4-line mode only ****
+    // gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D3, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D3, needed in 4- and 1-line modes
 
     ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
@@ -331,12 +204,140 @@ static void mount_sd_card(void)
     }
 
     // Card has been initialized, print its properties
+    ESP_LOGI(TAG, "$ SD card initialized\n");
     sdmmc_card_print_info(stdout, card);
 }
 
 static const char* get_filename()
 {
     return "tmp003.imu";
+}
+
+static void write_data_to_sd(void * fn)
+{   
+    EventBits_t status_bits;
+    // Use POSIX and C standard library functions to work with files.
+    // First create a file.
+    // TODO: Check options to assign file to random sector to increase longevity of sd card 
+    const char* filename = (const char*) fn; 
+    ESP_LOGI(TAG, "Opening file: %s", filename);
+    char filepath[100];
+    strcpy(filepath, MOUNT_POINT); 
+    strcat(filepath, "/");
+    strcat(filepath, filename);
+
+    FILE* active_file = fopen(filepath, "w");
+    if (active_file == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return;
+    }
+    //
+    // File created 
+    // 
+    bool data_written = pdFALSE; 
+
+    while (true) {
+        // Try to read from queue only if data is being written or there are messages left in the queue
+        status_bits = xEventGroupGetBits(command_event_group); 
+        if((status_bits&MPUWriting_BIT) | uxQueueMessagesWaiting(data_queue)){
+            data_written = pdTRUE;
+
+            // Write data to file 
+            // TODO: 
+            // Bytes 0...507:   sensor reads from fifo (currently only ~0...360 are used -> OPTIMIZTION POTENTIAL)
+            // Bytes 508, 509:  timestamp (of the last MPU-interrupt?!) 
+            // Bytes 510, 511:  fifo byte count 
+            // ----> 4 of these packets per fwrite
+            uint8_t FIFOpacket[kFIFOSize];
+            mpud::raw_axes_t rawAccel;
+            mpud::raw_axes_t rawGyro;
+            mpud::float_axes_t accelG;   // accel axes in (g) gravity format
+            mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
+
+            if(xQueueReceive(data_queue, (void*) FIFOpacket, 1000/portTICK_PERIOD_MS)!=pdTRUE){
+                ESP_LOGE(TAG, "Reading from queue faled. \n");
+            }
+            else{
+                ESP_LOGI(TAG, "Successfully read data package from queue.");
+                uint16_t fifocount; 
+                fifocount = ((uint16_t)FIFOpacket[511] << 8) | FIFOpacket[510]; 
+                // ESP_LOGI(TAG, "fifocount read: %d", fifocount);
+                gpio_set_level((gpio_num_t)LOG_PIN, 0);
+                fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), active_file);
+                for(uint16_t i = 0; i < fifocount;i+=kFIFOPacketSize){
+                    /*
+                    ESP_LOGI(TAG, "Packet Nb.: %d", i);
+                    rawAccel.x = FIFOpacket[i] << 8 | FIFOpacket[i+1];
+                    rawAccel.y = FIFOpacket[i+2] << 8 | FIFOpacket[i+3];
+                    rawAccel.z = FIFOpacket[i+4] << 8 | FIFOpacket[i+5];
+                    rawGyro.x  = FIFOpacket[i+6] << 8 | FIFOpacket[i+7];
+                    rawGyro.y  = FIFOpacket[i+8] << 8 | FIFOpacket[i+9];
+                    rawGyro.z  = FIFOpacket[i+10] << 8 | FIFOpacket[i+11];
+                    accelG = mpud::accelGravity(rawAccel, mpud::ACCEL_FS_4G);
+                    gyroDPS = mpud::gyroDegPerSec(rawGyro, mpud::GYRO_FS_500DPS);
+                    ESP_LOGI(TAG, "\t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t\t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
+                    */
+                }
+                gpio_set_level((gpio_num_t)LOG_PIN, 1);
+            }
+        }
+        else{
+            ESP_LOGW(TAG, "Not writing data. data_written: %i", data_written);
+            // TODO: Read the remaining queue elements!!! 
+            if(data_written){
+                fclose(active_file);
+                ESP_LOGI(TAG, "File closed. Deleting Task...");
+                vTaskDelete(print_task_handle);
+            }       
+        }
+        
+    }
+}
+
+static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_PROV_EVENT) {
+        switch (event_id) {
+            case WIFI_PROV_START:
+                ESP_LOGI(TAG, "Provisioning started");
+                break;
+            case WIFI_PROV_CRED_RECV: {
+                wifi_sta_config_t *wifi_sta_cfg = (wifi_sta_config_t *)event_data;
+                ESP_LOGI(TAG, "Received Wi-Fi credentials"
+                         "\n\tSSID     : %s\n\tPassword : %s",
+                         (const char *) wifi_sta_cfg->ssid,
+                         (const char *) wifi_sta_cfg->password);
+                break;
+            }
+            case WIFI_PROV_CRED_FAIL: {
+                wifi_prov_sta_fail_reason_t *reason = (wifi_prov_sta_fail_reason_t *)event_data;
+                ESP_LOGE(TAG, "Provisioning failed!\n\tReason : %s"
+                         "\n\tPlease reset to factory and retry provisioning",
+                         (*reason == WIFI_PROV_STA_AUTH_ERROR) ?
+                         "Wi-Fi station authentication failed" : "Wi-Fi access-point not found");
+                break;
+            }
+            case WIFI_PROV_CRED_SUCCESS:
+                ESP_LOGI(TAG, "Provisioning successful");
+                break;
+            case WIFI_PROV_END:
+                /* De-initialize manager once provisioning is finished */
+                wifi_prov_mgr_deinit();
+                break;
+            default:
+                break;
+        }
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        ESP_LOGI(TAG, "Connected with IP Address:" IPSTR, IP2STR(&event->ip_info.ip));
+        /* Signal main application to continue execution */
+        xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_EVENT);
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        ESP_LOGI(TAG, "Disconnected. Connecting to the AP again...");
+        esp_wifi_connect();
+    }
 }
 
 static void provision_wifi()
@@ -469,54 +470,6 @@ static void provision_wifi()
 
 }
 
-
-/* Event handler for catching system events */
-static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
-{
-    if (event_base == WIFI_PROV_EVENT) {
-        switch (event_id) {
-            case WIFI_PROV_START:
-                ESP_LOGI(TAG, "Provisioning started");
-                break;
-            case WIFI_PROV_CRED_RECV: {
-                wifi_sta_config_t *wifi_sta_cfg = (wifi_sta_config_t *)event_data;
-                ESP_LOGI(TAG, "Received Wi-Fi credentials"
-                         "\n\tSSID     : %s\n\tPassword : %s",
-                         (const char *) wifi_sta_cfg->ssid,
-                         (const char *) wifi_sta_cfg->password);
-                break;
-            }
-            case WIFI_PROV_CRED_FAIL: {
-                wifi_prov_sta_fail_reason_t *reason = (wifi_prov_sta_fail_reason_t *)event_data;
-                ESP_LOGE(TAG, "Provisioning failed!\n\tReason : %s"
-                         "\n\tPlease reset to factory and retry provisioning",
-                         (*reason == WIFI_PROV_STA_AUTH_ERROR) ?
-                         "Wi-Fi station authentication failed" : "Wi-Fi access-point not found");
-                break;
-            }
-            case WIFI_PROV_CRED_SUCCESS:
-                ESP_LOGI(TAG, "Provisioning successful");
-                break;
-            case WIFI_PROV_END:
-                /* De-initialize manager once provisioning is finished */
-                wifi_prov_mgr_deinit();
-                break;
-            default:
-                break;
-        }
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "Connected with IP Address:" IPSTR, IP2STR(&event->ip_info.ip));
-        /* Signal main application to continue execution */
-        xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_EVENT);
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "Disconnected. Connecting to the AP again...");
-        esp_wifi_connect();
-    }
-}
-
 static void wifi_init_sta(void)
 {
     /* Start Wi-Fi in station mode */
@@ -533,7 +486,11 @@ static void get_device_service_name(char *service_name, size_t max)
              ssid_prefix, eth_mac[3], eth_mac[4], eth_mac[5]);
 }
 
-static void udp_send_sensor_data_task(void *pvParameters)
+// # # # # # # # # # # 
+// UDP STUFF
+// # # # # # # # # # # 
+
+static void udp_tx_sensor_data(void *pvParameters)
 {
     
     while (1) {
@@ -610,6 +567,88 @@ static void udp_send_sensor_data_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
+static void udp_rx_commands_task(void * fn)
+{
+    char rx_buffer[128];
+    char host_ip[] = HOST_IP_ADDR;
+    int addr_family = 0;
+    int ip_protocol = 0;
+    static const char *payload = "Ready!";
+
+    while (1) {
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(COMMAND_PORT);
+        addr_family = AF_INET;
+        ip_protocol = IPPROTO_IP;
+
+        int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
+        if (sock < 0) {
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            break;
+        }
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+            ESP_LOGE(TAG, "Unable to set socket option: errno %d", errno);
+        }
+
+
+        ESP_LOGI(TAG, "Socket created, sending to %s:%d", HOST_IP_ADDR, COMMAND_PORT);
+
+        while (1) {
+
+            int err = sendto(sock, payload, strlen(payload), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+            if (err < 0) {
+                ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                break;
+            }
+            // ESP_LOGI(TAG, "Message sent");
+
+
+            struct sockaddr_storage source_addr; // Large enough for both IPv4 or IPv6
+            socklen_t socklen = sizeof(source_addr);
+            int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
+
+            // Error occurred during receiving
+            if (len < 0) {
+                // ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+                // break;
+            }
+            // Data received
+            else {
+                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
+                ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
+                ESP_LOGI(TAG, "%s", rx_buffer);
+                float f; 
+                f = (float)atof(rx_buffer);
+                if (strncmp(rx_buffer, "Start", 5) == 0) {
+                    ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
+                    xEventGroupSetBits(command_event_group, StartMeasurement_BIT);
+                }                
+                else if (strncmp(rx_buffer, "Stop", 4) == 0)
+                {
+                    ESP_LOGI(TAG, "Received Stop Command. Clearing Event Bit.");
+                    xEventGroupClearBits(command_event_group, StartMeasurement_BIT);
+                }
+                
+            }
+        }
+
+        if (sock != -1) {
+            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            shutdown(sock, 0);
+            close(sock);
+        }
+    }
+    vTaskDelete(udp_cmd_task_handle);
+}
+
+// # # # # # # # # # # 
+// MULTICAST STUFF
+// # # # # # # # # # # 
 
 static void mcast_example_task(void *pvParameters)
 {
@@ -743,9 +782,6 @@ static void mcast_example_task(void *pvParameters)
     }
 }
 
-
-/* Add a socket, either IPV4-only or IPV6 dual mode, to the IPV4
-   multicast group */
 static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if)
 {
     struct ip_mreq imreq = { 0 };
@@ -785,7 +821,6 @@ static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if)
     }
     return err;
 }
-
 
 static int create_multicast_ipv4_socket(void)
 {
@@ -830,4 +865,45 @@ static int create_multicast_ipv4_socket(void)
 
     // All set, socket is configured for sending and receiving
     return sock;
+}
+
+
+
+
+// # # # # # # # # # # # # # # # # # # 
+// Main
+// # # # # # # # # # # # # # # # # # # 
+extern "C" void app_main()
+{   
+    // first of all create event groups for inter-task communication 
+    status_event_group = xEventGroupCreate(); 
+    command_event_group = xEventGroupCreate(); 
+
+    // set up file system 
+    mount_sd_card();
+
+    // provision WiFi and connect 
+    provision_wifi();
+
+    // Initialize bus through either the Library API or esp-idf API
+    spi.begin(MOSI, MISO, SCLK);
+
+    // Create a queue to store sensor readings 
+    uint8_t data_frame[kFIFOSize];
+    data_queue = xQueueCreate(10, sizeof(data_frame));
+    
+    // Create UDP Multicast task for syncing 
+    xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 5, NULL);
+    
+    // Create UDP task to receive commands from host 
+    xTaskCreate(udp_rx_commands_task, "udp_rx_cmd", 4096, NULL, 5, &udp_cmd_task_handle);
+
+    // Create a task to setup mpu and read sensor data
+    xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, &mpu_task_handle);   
+
+    // TODO: restructure... 
+    // Create task to write the file 
+    const char * filename = get_filename();  // make filename accessible for several tasks 
+    xTaskCreate(write_data_to_sd, "writeData", 2 * 2048, (void*) filename, 0, &print_task_handle);
+
 }

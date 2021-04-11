@@ -1,10 +1,48 @@
 #ifndef MAIN_HPP
 #define MAIN_HPP
 
-/* Bus configuration */
+#include <math.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string>
+#include <cstring>
+using namespace std;
 
-// This MACROS are defined in "skdconfig.h" and set through 'menuconfig'.
-// Can use to check which protocol has been selected.
+#include "esp_system.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "lwip/err.h"
+#include "lwip/sockets.h"
+#include "lwip/sys.h"
+#include <lwip/netdb.h>
+
+#include "nvs_flash.h"
+#include "wifi_provisioning/manager.h"
+#include "wifi_provisioning/scheme_ble.h"
+
+#include <sys/unistd.h>
+#include <sys/stat.h>
+#include "sdmmc_cmd.h"
+#include "driver/sdmmc_host.h"
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "esp_vfs_fat.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
+#include "freertos/event_groups.h"
+
+#include "sdkconfig.h"
+
+#include "MPU.hpp"
+#include "mpu/math.hpp"
+#include "mpu/types.hpp"
 
 #include "SPIbus.hpp"
 static SPI_t& spi                     = vspi;  // hspi or vspi
@@ -33,7 +71,7 @@ void mpu_spi_post_transfer_callback(spi_transaction_t *t)
 /* MPU configuration */
 
 static constexpr int kInterruptPin         = 34;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 500;  // Hz
+static constexpr uint16_t kSampleRate      = 50;  // Hz
 static constexpr mpud::accel_fs_t kAccelFS = mpud::ACCEL_FS_4G;
 static constexpr mpud::gyro_fs_t kGyroFS   = mpud::GYRO_FS_500DPS;
 static constexpr mpud::dlpf_t kDLPF        = mpud::DLPF_98HZ;
@@ -50,7 +88,7 @@ constexpr uint16_t kFIFOSize = 512;  // in Byte
 
 /*-*/
 
-static const char* TAG = "MPU9250";
+static const char* TAG = "App";
 
 /* SD card configuation */
 
@@ -62,19 +100,6 @@ static constexpr int PIN_NUM_SD_D3             = 13;
 
 #define MOUNT_POINT "/sdcard"
 
-
-/* Tasks */
-
-static void mpuISR(void*);
-static void mpuTask(void*);
-static void printTask(void*);
-
-static void mount_sd_card(void);
-
-static const char* get_filename();
-
-TaskHandle_t mpu_task_handle = NULL; 
-TaskHandle_t print_task_handle = NULL; 
 xQueueHandle data_queue; 
 
 // WIFI STUFF 
@@ -88,12 +113,49 @@ xQueueHandle data_queue;
 #define MULTICAST_IPV4_ADDR "224.3.29.71"
 #define UDP_PORT 10000
 
+#define COMMAND_PORT 3334
+
 static const char *V4TAG = "mcast-ipv4";
 
 const int WIFI_CONNECTED_EVENT = BIT0;
 static EventGroupHandle_t wifi_event_group;
+static EventGroupHandle_t command_event_group; 
+static EventGroupHandle_t status_event_group; 
 
-static void udp_send_sensor_data_task(void *pvParameters);
+
+const int MPUReady_BIT = BIT0;
+const int MPUWriting_BIT = BIT1;
+const int FileSystemReady_BIT = BIT2;
+const int RxCommandsReady_BIT = BIT3;
+// ... continue as needed
+
+const int StartMeasurement_BIT = BIT1;
+const int IsMeasuring_BIT = BIT2;
+const int FileSaved_BIT = BIT3;
+const int MPUReadyForMeasurement_BIT = BIT0;
+
+static MPU_t MPU; 
+
+/* Tasks */
+
+
+TaskHandle_t mpu_task_handle = NULL; 
+TaskHandle_t udp_cmd_task_handle = NULL; 
+TaskHandle_t print_task_handle = NULL; 
+
+static void mpuISR(void*);
+
+static void mpuTask(void*);
+
+static void write_data_to_sd(void*);
+
+static void udp_rx_commands_task(void*);
+
+static void mount_sd_card(void);
+
+static const char* get_filename();
+
+static void udp_tx_sensor_data(void *pvParameters);
 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 
@@ -110,5 +172,7 @@ static void mcast_example_task(void *pvParameters);
 static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if);
 
 static int create_multicast_ipv4_socket(void);
+
+/* Tasks */
 
 #endif

@@ -23,6 +23,10 @@
         "initializer_list": "cpp",
         "*.ipp": "cpp",
         "typeinfo": "cpp",
-        "functional": "cpp"
+        "functional": "cpp",
+        "*.tcc": "cpp",
+        "cmath": "cpp",
+        "random": "cpp",
+        "type_traits": "cpp"
     }
 }

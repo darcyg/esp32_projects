@@ -72,7 +72,7 @@ extern "C" void app_main()
     // Create a task to setup mpu and read sensor data
     xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, nullptr);
     xTaskCreate(udp_send_sensor_data_task, "udp_sensor", 4096, NULL, 5, NULL);
-    // xTaskCreate(udp_receive_throttle_task, "udp_motor", 4096, NULL, 5, NULL);
+    xTaskCreate(udp_receive_throttle_task, "udp_motor", 4096, NULL, 5, NULL);
 
 }
 
