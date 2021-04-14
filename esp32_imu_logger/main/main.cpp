@@ -72,7 +72,7 @@ static void mpuTask(void*)
     // # # # # # # # # # # 
     // set the number of data-ready interrupts of mpu to wait before actually doing something 
     // this way constantly checking the fifo count isn't necessary
-    uint32_t n_interrupts_wait = (uint32_t)(kFIFOSize/kFIFOPacketSize*0.75);
+    uint32_t n_interrupts_wait = (uint32_t)(kFIFOSize/kFIFOPacketSize*0.85);
     ESP_LOGI(TAG, "n_interrupts_wait: %d\n",n_interrupts_wait);
 
     constexpr gpio_config_t kGPIOConfig{
@@ -124,7 +124,7 @@ static void mpuTask(void*)
         }
         // Push data into data_frame 
         // Burst read data from FIFO
-        DataFrame data_frame; 
+        struct DataFrame data_frame; 
         if (esp_err_t err = MPU.readFIFO_HS(fifocount, data_frame.SensorReads)) {
             ESP_LOGE(TAG, "Error reading sensor data, %#X", err);
             MPU.resetFIFO();
@@ -151,18 +151,18 @@ static void mpuTask(void*)
                 ESP_LOGE(TAG, "Writing to queue faled.");
             }
             else{
-                xEventGroupSetBits(status_event_group, MPUWriting_BIT);
+                xEventGroupSetBits(status_event_group, ucMPUWriting_BIT);
             }
         }
         else{
-            xEventGroupClearBits(status_event_group, MPUWriting_BIT);
+            xEventGroupClearBits(status_event_group, ucMPUWriting_BIT);
             // ESP_LOGW(TAG, "Measurement not started yet...");
         }            
     }
     vTaskDelete(nullptr);
 }
 
-static void mount_sd_card(void)
+static void prvMountSDCard(void)
 {
     //
     // Create filesystem and mount 
@@ -200,8 +200,6 @@ static void mount_sd_card(void)
     gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_CMD, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_CMD, needed in 4- and 1- line modes
     gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D0, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D0, needed in 4- and 1-line modes
     gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D1, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D1, needed in 4-line mode only ****
-    // gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D2, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D2, needed in 4-line mode only ****
-    // gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D3, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_D3, needed in 4- and 1-line modes
 
     ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
@@ -217,29 +215,23 @@ static void mount_sd_card(void)
     }
 
     // Card has been initialized, print its properties
-    ESP_LOGI(TAG, "$ SD card initialized\n");
+    ESP_LOGI(TAG, "$ SD card sucessfully initialized.");
     sdmmc_card_print_info(stdout, card);
 }
 
-static const char* get_filename()
-{
-    return "tmp003.imu";
-}
-
-static void write_data_to_sd(void * fn)
+static void prvWriteFileSD(void*)
 {   
-    EventBits_t status_bits;
+    EventBits_t xStatusBits;
     // Use POSIX and C standard library functions to work with files.
     // First create a file.
     // TODO: Check options to assign file to random sector to increase longevity of sd card 
-    const char* filename = (const char*) fn; 
-    ESP_LOGI(TAG, "Opening file: %s", filename);
+    ESP_LOGI(TAG, "Opening file: %s", pcTmpFileDefault);
     char filepath[100];
     strcpy(filepath, MOUNT_POINT); 
     strcat(filepath, "/");
-    strcat(filepath, filename);
+    strcat(filepath, pcTmpFileDefault);
 
-    FILE* active_file = fopen(filepath, "w");
+    FILE* active_file = fopen(filepath, "wb");
     if (active_file == NULL) {
         ESP_LOGE(TAG, "Failed to open file for writing");
         return;
@@ -248,30 +240,39 @@ static void write_data_to_sd(void * fn)
     // File created 
     // 
     bool data_written = pdFALSE; 
+    uint16_t n_packets = 0;
     while (true) {
         // Try to read from queue only if data is being written or there are messages left in the queue
-        status_bits = xEventGroupGetBits(command_event_group); 
-        if((status_bits & MPUWriting_BIT) | uxQueueMessagesWaiting(data_queue)){
+        xStatusBits = xEventGroupGetBits(command_event_group); 
+        if((xStatusBits & ucMPUWriting_BIT) | uxQueueMessagesWaiting(data_queue)){
+            if(!data_written){
+                ESP_LOGI(TAG, "Writing data..."); 
+            }
             data_written = pdTRUE;
             // Write data to file 
-            DataFrame data_frame;
+            struct DataFrame data_frame;
             if(xQueueReceive(data_queue, &data_frame, 1000/portTICK_PERIOD_MS)!=pdTRUE){
                 ESP_LOGE(TAG, "Reading from queue faled. \n");
             }
             else{
-                ESP_LOGI(TAG, "Successfully read data package from queue. n_samples: %d", data_frame.n_samples);
+                // ESP_LOGI(TAG, "Successfully read data package from queue. n_samples: %d", data_frame.n_samples);
                 gpio_set_level((gpio_num_t)LOG_PIN, 0);
                 // fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), active_file);
-                fwrite (&data_frame , sizeof(struct DataSample6Axis), data_frame.n_samples, active_file);
+                fwrite (&data_frame , sizeof(data_frame), 1, active_file);
                 gpio_set_level((gpio_num_t)LOG_PIN, 1);
+                n_packets ++;
             }
         }
         else{
-            // ESP_LOGW(TAG, "Not writing data. data_written: %i", data_written);
+            // ESP_LOGW(TAG, "Now writing data. data_written: %i", data_written);
             if(data_written){
                 fclose(active_file);
                 ESP_LOGI(TAG, "File closed. Deleting Task...");
-                vTaskDelete(print_task_handle);
+                ESP_LOGI(TAG, "Packets written: %d", n_packets);
+                xEventGroupSetBits(status_event_group, ucFileSaved_BIT);
+                // Create task to transmit file
+                xTaskCreate(prvTransmitFileTCP, "TransmitFile", 2 * 2048, NULL, 0, &xHandleTransmitFileTCP);
+                vTaskDelete(xHandleWriteFileSD);
             }       
         }
         
@@ -470,6 +471,157 @@ static void get_device_service_name(char *service_name, size_t max)
              ssid_prefix, eth_mac[3], eth_mac[4], eth_mac[5]);
 }
 
+
+// # # # # # # # # # # 
+// TCP STUFF
+// # # # # # # # # # # 
+
+static void prvTransmitFileTCP(void*)
+{
+    EventBits_t xStatusBits;
+    
+    char cFilepath[100];
+    strcpy(cFilepath, MOUNT_POINT); 
+    strcat(cFilepath, "/");
+    strcat(cFilepath, pcTmpFileDefault);
+
+    char rx_buffer[128];
+    char host_ip[] = HOST_IP_ADDR;
+    int addr_family = 0;
+    int ip_protocol = 0;
+
+    while(true)
+    {
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_addr.s_addr = inet_addr(host_ip);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(TCP_PORT);
+        addr_family = AF_INET;
+        ip_protocol = IPPROTO_IP;
+
+        int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
+        if (sock < 0) {
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            break;
+        }
+        ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, TCP_PORT);
+
+        int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6));
+        if (err != 0) {
+            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
+            break;
+        }
+        ESP_LOGI(TAG, "Successfully connected");
+
+        bool file_transmitted = pdFALSE; 
+        while(true)
+        {
+            xStatusBits = xEventGroupGetBits(status_event_group); 
+            if((xStatusBits & ucFileSaved_BIT)){
+                ESP_LOGI(TAG, "Opening file: %s", pcTmpFileDefault);
+                unsigned long lSize;
+                struct DataFrame pDataBuffer;
+                FILE* pFile = fopen(cFilepath, "rb");
+                if (pFile == NULL) {
+                    ESP_LOGE(TAG, "Failed to open file for reading.");
+                    break;
+                }
+                // Read file contents and trasmit
+                ESP_LOGI(TAG, "Reading contents...");
+                // obtain file size:
+                fseek(pFile , 0 , SEEK_END);
+                lSize = ftell(pFile);
+                rewind (pFile);
+                ESP_LOGI(TAG, "File Size: %lu", lSize);
+                ESP_LOGI(TAG, "DataFrame Size: %d", sizeof(pDataBuffer));
+                ESP_LOGI(TAG, "Number of DataFrame structs written: %d", (int)(lSize/sizeof(pDataBuffer)));
+
+                uint16_t i_frame = 0;
+                int64_t t_0 = 0; 
+                
+
+                while(fread(&pDataBuffer, sizeof(pDataBuffer), 1, pFile)){
+                    ESP_LOGI(TAG, "frame: %d: n_samples = %d ", i_frame, pDataBuffer.n_samples);
+                    float tcp_packet[pDataBuffer.n_samples][7];
+                    i_frame ++;
+                    uint32_t ulTime_us; 
+                    mpud::raw_axes_t accelRaw;  // accel raw axes 
+                    mpud::raw_axes_t gyroRaw;  // gyro raw axes 
+                    mpud::float_axes_t accelG;   // accel axes in (g) gravity format
+                    mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
+                    for(uint8_t i=0; i <= pDataBuffer.n_samples-1; i++){
+                        if(t_0 == 0){
+                            t_0 = pDataBuffer.Timestamps[i];
+                        }
+                        ulTime_us = (uint32_t)(pDataBuffer.Timestamps[i] - t_0);
+                        accelRaw.x = pDataBuffer.SensorReads[0+i*12] << 8 | pDataBuffer.SensorReads[1+i*12];
+                        accelRaw.y = pDataBuffer.SensorReads[2+i*12] << 8 | pDataBuffer.SensorReads[3+i*12];
+                        accelRaw.z = pDataBuffer.SensorReads[4+i*12] << 8 | pDataBuffer.SensorReads[5+i*12];
+                        gyroRaw.x  = pDataBuffer.SensorReads[6+i*12] << 8 | pDataBuffer.SensorReads[7+i*12];
+                        gyroRaw.y  = pDataBuffer.SensorReads[8+i*12] << 8 | pDataBuffer.SensorReads[9+i*12];
+                        gyroRaw.z  = pDataBuffer.SensorReads[10+i*12] << 8 | pDataBuffer.SensorReads[11+i*12];
+                        
+                        accelG = mpud::accelGravity(accelRaw, kAccelFS);
+                        gyroDPS = mpud::gyroDegPerSec(gyroRaw, kGyroFS);
+
+                        tcp_packet[i][0] = (float)(ulTime_us/1000.0);
+                        tcp_packet[i][1] = accelG.x;
+                        tcp_packet[i][2] = accelG.y;
+                        tcp_packet[i][3] = accelG.z;
+                        tcp_packet[i][4] = gyroDPS.x;
+                        tcp_packet[i][5] = gyroDPS.y;
+                        tcp_packet[i][6] = gyroDPS.z;
+
+                        // ESP_LOGI(TAG, "t: %d \t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", ulTime_us, accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
+
+                    }
+                    // SEND DATA VIA TCP SOCKET
+                    int err = send(sock, tcp_packet, sizeof(tcp_packet), 0);
+                    if (err < 0) {
+                        ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                        break;
+                    }
+
+                    int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+                    // Error occurred during receiving
+                    if (len < 0) {
+                        ESP_LOGE(TAG, "recv failed: errno %d", errno);
+                        break;
+                    }
+                    // Data received
+                    else {
+                        rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
+                        ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
+                        ESP_LOGI(TAG, "%s", rx_buffer);
+                    }
+                }
+                    
+                // DONE TRANSMITTING -> CLOSE FILE AND DELETE. IT'S IN A BETTER PLACE NOW... 
+                ESP_LOGI(TAG, "File successfully transmitted.");
+                fclose(pFile);
+                if(remove(cFilepath) != 0){
+                    ESP_LOGE(TAG, "Error deleting file");                    
+                }
+                else{
+                    ESP_LOGW(TAG, "File successfully deleted. Deleting task.");
+                    xTaskCreate(prvWriteFileSD, "WriteFile", 2 * 2048, NULL, 0, &xHandleWriteFileSD);
+                    file_transmitted = pdTRUE; 
+                    break;
+                }
+            }
+            vTaskDelay(1000/portTICK_PERIOD_MS);
+        }
+        if (sock != -1) {
+            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            shutdown(sock, 0);
+            close(sock);
+            if(file_transmitted){break;}
+        }
+    }
+    vTaskDelete(xHandleTransmitFileTCP);
+}
+
+
 // # # # # # # # # # # 
 // UDP STUFF
 // # # # # # # # # # # 
@@ -591,7 +743,6 @@ static void udp_rx_commands_task(void * fn)
             }
             // ESP_LOGI(TAG, "Message sent");
 
-
             struct sockaddr_storage source_addr; // Large enough for both IPv4 or IPv6
             socklen_t socklen = sizeof(source_addr);
             int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
@@ -604,13 +755,12 @@ static void udp_rx_commands_task(void * fn)
             // Data received
             else {
                 rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-                ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
-                ESP_LOGI(TAG, "%s", rx_buffer);
-                if (strncmp(rx_buffer, "Start", 5) == 0) {
+                ESP_LOGI(TAG, "Received %d bytes from %s: %s", len, host_ip, rx_buffer);
+                if (strncmp(rx_buffer, "rec_start", 9) == 0) {
                     ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
                     xEventGroupSetBits(command_event_group, StartMeasurement_BIT);
                 }                
-                else if (strncmp(rx_buffer, "Stop", 4) == 0)
+                else if (strncmp(rx_buffer, "rec_stop", 8) == 0)
                 {
                     ESP_LOGI(TAG, "Received Stop Command. Clearing Event Bit.");
                     xEventGroupClearBits(command_event_group, StartMeasurement_BIT);
@@ -850,42 +1000,39 @@ static int create_multicast_ipv4_socket(void)
 }
 
 
-
-
 // # # # # # # # # # # # # # # # # # # 
 // Main
 // # # # # # # # # # # # # # # # # # # 
+
 extern "C" void app_main()
 {   
     // first of all create event groups for inter-task communication 
     status_event_group = xEventGroupCreate(); 
     command_event_group = xEventGroupCreate(); 
 
-    // set up file system 
-    mount_sd_card();
+    // Create queues to store sensor readings and system ticks of the readings 
+    data_queue = xQueueCreate(5, sizeof(struct DataFrame));
+    mpu_ticks_queue = xQueueCreate(kFIFOReadsMax, sizeof(int64_t));
+
+    // Set up file system 
+    prvMountSDCard();
 
     // provision WiFi and connect 
     provision_wifi();
 
     // Initialize bus through either the Library API or esp-idf API
     spi.begin(MOSI, MISO, SCLK);
-
-    // Create queues to store sensor readings and system ticks of the readings 
-    data_queue = xQueueCreate(5, sizeof(DataFrame));
-    mpu_ticks_queue = xQueueCreate(kFIFOReadsMax, sizeof(int64_t));
     
     // Create UDP Multicast task for syncing 
-    xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 5, NULL);
+    // xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 5, NULL);
     
     // Create UDP task to receive commands from host 
     xTaskCreate(udp_rx_commands_task, "udp_rx_cmd", 4096, NULL, 5, &udp_cmd_task_handle);
 
     // Create a task to setup mpu and read sensor data
-    xTaskCreate(mpuTask, "mpuTask", 4 * 2048, nullptr, 6, &mpu_task_handle);   
+    xTaskCreate(mpuTask, "mpuTask", 4 * 2048, NULL, 6, &mpu_task_handle);   
 
-    // TODO: restructure... 
     // Create task to write the file 
-    const char * filename = get_filename();  // make filename accessible for several tasks 
-    xTaskCreate(write_data_to_sd, "writeData", 2 * 2048, (void*) filename, 0, &print_task_handle);
+    xTaskCreate(prvWriteFileSD, "WriteFile", 2 * 2048, NULL, 0, &xHandleWriteFileSD);    
 
 }

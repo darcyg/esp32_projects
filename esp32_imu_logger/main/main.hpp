@@ -100,6 +100,7 @@ static constexpr int PIN_NUM_SD_D2             = 12;
 static constexpr int PIN_NUM_SD_D3             = 13;
 
 #define MOUNT_POINT "/sdcard"
+static const char *pcTmpFileDefault = "tmp_000.imu";
 
 xQueueHandle data_queue; 
 xQueueHandle timestamp_queue; 
@@ -125,6 +126,7 @@ struct DataSample6Axis
 #define HOST_IP_ADDR "192.168.178.68"
 #define PORT 3333
 #define COMMAND_PORT 3334
+#define TCP_PORT 65432
 
 #define MULTICAST_TTL 1
 
@@ -138,38 +140,47 @@ static EventGroupHandle_t wifi_event_group;
 static EventGroupHandle_t command_event_group; 
 static EventGroupHandle_t status_event_group; 
 
+// status_event_group bits: 
+const uint8_t ucMPUReady_BIT          = BIT0;
+const uint8_t ucMPUWriting_BIT        = BIT1;
+const uint8_t ucFSReady_BIT           = BIT2;
+const uint8_t ucRxCommandsReady_BIT   = BIT3;
+const uint8_t ucFileSaved_BIT         = BIT4;
+const uint8_t ucNOTUSED_BIT0          = BIT5;
+const uint8_t ucNOTUSED_BIT1          = BIT6;
+const uint8_t ucNOTUSED_BIT2          = BIT7;
+// ... continue as needed 
 
-const int MPUReady_BIT = BIT0;
-const int MPUWriting_BIT = BIT1;
-const int FileSystemReady_BIT = BIT2;
-const int RxCommandsReady_BIT = BIT3;
-// ... continue as needed
-
-const int StartMeasurement_BIT = BIT1;
-const int IsMeasuring_BIT = BIT2;
-const int FileSaved_BIT = BIT3;
-const int MPUReadyForMeasurement_BIT = BIT0;
+// command_event_group bits: 
+const uint8_t MPUReadyForMeasurement_BIT = BIT0;
+const uint8_t StartMeasurement_BIT = BIT1;
+const uint8_t IsMeasuring_BIT = BIT2;
 
 static MPU_t MPU; 
 
-/* Tasks */
+/* Functions */
 
+static void prvMountSDCard(void);
+
+
+/* Tasks */
 
 TaskHandle_t mpu_task_handle = NULL; 
 TaskHandle_t udp_cmd_task_handle = NULL; 
-TaskHandle_t print_task_handle = NULL; 
+TaskHandle_t xHandleWriteFileSD = NULL; 
+TaskHandle_t xHandleTransmitFileTCP = NULL; 
+TaskHandle_t xHandleMountSDCard = NULL; 
+
+static void prvTransmitFileTCP(void*);
+
+static void prvWriteFileSD(void*);
+
 
 static void mpuISR(void*);
 
 static void mpuTask(void*);
 
-static void write_data_to_sd(void*);
-
 static void udp_rx_commands_task(void*);
-
-static void mount_sd_card(void);
-
-static const char* get_filename();
 
 static void udp_tx_sensor_data(void *pvParameters);
 
