@@ -18,6 +18,7 @@ using namespace std;
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
 
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
@@ -30,6 +31,11 @@ using namespace std;
 #include "driver/spi_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
+
+#include "esp_ota_ops.h"
+#include "esp_http_client.h"
+#include "esp_https_ota.h"
+
 #include "esp_vfs_fat.h"
 
 #include "freertos/FreeRTOS.h"
@@ -140,6 +146,34 @@ static EventGroupHandle_t wifi_event_group;
 static EventGroupHandle_t command_event_group; 
 static EventGroupHandle_t status_event_group; 
 
+esp_err_t _http_event_handler(esp_http_client_event_t *evt)
+{
+    switch (evt->event_id) {
+    case HTTP_EVENT_ERROR:
+        ESP_LOGD(TAG, "HTTP_EVENT_ERROR");
+        break;
+    case HTTP_EVENT_ON_CONNECTED:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_CONNECTED");
+        break;
+    case HTTP_EVENT_HEADER_SENT:
+        ESP_LOGD(TAG, "HTTP_EVENT_HEADER_SENT");
+        break;
+    case HTTP_EVENT_ON_HEADER:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+        break;
+    case HTTP_EVENT_ON_DATA:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
+        break;
+    case HTTP_EVENT_ON_FINISH:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_FINISH");
+        break;
+    case HTTP_EVENT_DISCONNECTED:
+        ESP_LOGD(TAG, "HTTP_EVENT_DISCONNECTED");
+        break;
+    }
+    return ESP_OK;
+}
+
 // status_event_group bits: 
 const uint8_t ucMPUReady_BIT          = BIT0;
 const uint8_t ucMPUWriting_BIT        = BIT1;
@@ -174,6 +208,8 @@ TaskHandle_t xHandleMountSDCard = NULL;
 static void prvTransmitFileTCP(void*);
 
 static void prvWriteFileSD(void*);
+
+static void prvSimpleOtaExample(void*);
 
 
 static void mpuISR(void*);
