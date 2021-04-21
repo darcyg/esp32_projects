@@ -1000,6 +1000,32 @@ static int create_multicast_ipv4_socket(void)
 }
 
 
+static void prvSimpleOtaExample(void*)
+{
+    ESP_LOGI(TAG, "Starting OTA example");
+
+    esp_http_client_config_t config = {
+        .url = "https://192.168.178.68:8070/simple_ota_example.bin",
+        .cert_pem = NULL, // (char *)server_cert_pem_start,
+        .event_handler = _http_event_handler,
+    };
+
+    while (1){
+        if (0){ // TODO: Implement proper condition 
+            vTaskSuspendAll();
+            esp_err_t ret = esp_https_ota(&config);
+            if (ret == ESP_OK) {
+                esp_restart();
+            } else {
+                ESP_LOGE(TAG, "Firmware upgrade failed");
+            }
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+}
+
+
+
 // # # # # # # # # # # # # # # # # # # 
 // Main
 // # # # # # # # # # # # # # # # # # # 
@@ -1019,6 +1045,9 @@ extern "C" void app_main()
 
     // provision WiFi and connect 
     provision_wifi();
+
+    // Create OTA update task 
+    xTaskCreate(&prvSimpleOtaExample, "ota_update_task", 8192, NULL, 5, NULL);
 
     // Initialize bus through either the Library API or esp-idf API
     spi.begin(MOSI, MISO, SCLK);
