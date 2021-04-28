@@ -129,7 +129,8 @@ struct DataSample6Axis
 // WIFI STUFF 
 /* Signal Wi-Fi events on this event-group */
 
-#define HOST_IP_ADDR "192.168.178.68"
+//#define HOST_IP_ADDR "192.168.178.28"
+ #define HOST_IP_ADDR "192.168.178.68"
 #define PORT 3333
 #define COMMAND_PORT 3334
 #define TCP_PORT 65432

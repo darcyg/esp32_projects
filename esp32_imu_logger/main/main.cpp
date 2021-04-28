@@ -15,6 +15,7 @@ static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
 
 static void mpuTask(void*)
 {   
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     EventBits_t udp_cmd_bits;
     //Initialize non-SPI GPIOs
     gpio_set_direction((gpio_num_t)CS, GPIO_MODE_OUTPUT);
@@ -221,6 +222,7 @@ static void prvMountSDCard(void)
 
 static void prvWriteFileSD(void*)
 {   
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     EventBits_t xStatusBits;
     // Use POSIX and C standard library functions to work with files.
     // First create a file.
@@ -478,6 +480,8 @@ static void get_device_service_name(char *service_name, size_t max)
 
 static void prvTransmitFileTCP(void*)
 {
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
+
     EventBits_t xStatusBits;
     
     char cFilepath[100];
@@ -504,8 +508,14 @@ static void prvTransmitFileTCP(void*)
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
             break;
         }
+        struct timeval tv;
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
+            ESP_LOGE(TAG, "Unable to set socket option: errno %d", errno);
+        }
+        
         ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, TCP_PORT);
-
         int err = connect(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6));
         if (err != 0) {
             ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
@@ -532,7 +542,7 @@ static void prvTransmitFileTCP(void*)
                 fseek(pFile , 0 , SEEK_END);
                 lSize = ftell(pFile);
                 rewind (pFile);
-                ESP_LOGI(TAG, "File Size: %lu", lSize);
+                ESP_LOGI(TAG, "File Size: %lu bytes", lSize);
                 ESP_LOGI(TAG, "DataFrame Size: %d", sizeof(pDataBuffer));
                 ESP_LOGI(TAG, "Number of DataFrame structs written: %d", (int)(lSize/sizeof(pDataBuffer)));
 
@@ -586,6 +596,7 @@ static void prvTransmitFileTCP(void*)
                     // Error occurred during receiving
                     if (len < 0) {
                         ESP_LOGE(TAG, "recv failed: errno %d", errno);
+                        // TODO: ERROR HANDLE CORRECTLY! 
                         break;
                     }
                     // Data received
@@ -628,7 +639,7 @@ static void prvTransmitFileTCP(void*)
 
 static void udp_tx_sensor_data(void *pvParameters)
 {
-    
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     while (1) {
         struct sockaddr_in dest_addr;
         dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
@@ -705,11 +716,13 @@ static void udp_tx_sensor_data(void *pvParameters)
 
 static void udp_rx_commands_task(void * fn)
 {
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     char rx_buffer[128];
     char host_ip[] = HOST_IP_ADDR;
     int addr_family = 0;
     int ip_protocol = 0;
     static const char *payload = "Ready!";
+    int err = 0;
 
     while (1) {
         struct sockaddr_in dest_addr;
@@ -718,12 +731,16 @@ static void udp_rx_commands_task(void * fn)
         dest_addr.sin_port = htons(COMMAND_PORT);
         addr_family = AF_INET;
         ip_protocol = IPPROTO_IP;
+        
 
         int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
         if (sock < 0) {
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
             break;
         }
+        
+        err = bind(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in));
+
         struct timeval tv;
         tv.tv_sec = 1;
         tv.tv_usec = 0;
@@ -784,6 +801,7 @@ static void udp_rx_commands_task(void * fn)
 
 static void mcast_example_task(void *pvParameters)
 {
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     while (1) {
         
         gpio_set_direction((gpio_num_t)SYNC_PIN, GPIO_MODE_INPUT_OUTPUT);
@@ -845,22 +863,27 @@ static void mcast_example_task(void *pvParameters)
                         err = -1;
                         break;
                     }
-
-                    // Get the sender's address as a string
-                    if (raddr.sin6_family == PF_INET) {
-                        inet_ntoa_r(((struct sockaddr_in *)&raddr)->sin_addr.s_addr,
-                                    raddr_name, sizeof(raddr_name)-1);
+                    else{
+                        // Get the sender's address as a string
+                        if (raddr.sin6_family == PF_INET) {
+                            inet_ntoa_r(((struct sockaddr_in *)&raddr)->sin_addr.s_addr, raddr_name, sizeof(raddr_name)-1);
+                        }
+                        recvbuf[len] = 0; // Null-terminate whatever we received and treat like a string...
+                        ESP_LOGI(TAG, "received %d bytes from %s:", len, raddr_name);
+                        if (strncmp(recvbuf, "rec_start", 9) == 0) {
+                            ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
+                            xEventGroupSetBits(command_event_group, StartMeasurement_BIT);
+                        }                
+                        else if (strncmp(recvbuf, "rec_stop", 8) == 0)
+                        {
+                            ESP_LOGI(TAG, "Received Stop Command. Clearing Event Bit.");
+                            xEventGroupClearBits(command_event_group, StartMeasurement_BIT);
+                        }
+                        ESP_LOGI(TAG, "%s; %d", recvbuf, sync_status);
                     }
-
-                    ESP_LOGI(TAG, "received %d bytes from %s:", len, raddr_name);
-
-                    recvbuf[len] = 0; // Null-terminate whatever we received and treat like a string...
-                    
-                    ESP_LOGI(TAG, "%s; %d", recvbuf, sync_status);
-
                 }
             }
-        /*    
+        
             else { // s == 0
                 // Timeout passed with no incoming data, so send something!
                 static int send_count;
@@ -881,9 +904,8 @@ static void mcast_example_task(void *pvParameters)
                 };
                 struct addrinfo *res;
 
-
                 hints.ai_family = AF_INET; // For an IPv4 socket
-                int err = getaddrinfo(CONFIG_EXAMPLE_MULTICAST_IPV4_ADDR,
+                int err = getaddrinfo(MULTICAST_IPV4_ADDR,
                                       NULL,
                                       &hints,
                                       &res);
@@ -897,7 +919,7 @@ static void mcast_example_task(void *pvParameters)
                 }
                 ((struct sockaddr_in *)res->ai_addr)->sin_port = htons(UDP_PORT);
                 inet_ntoa_r(((struct sockaddr_in *)res->ai_addr)->sin_addr, addrbuf, sizeof(addrbuf)-1);
-                ESP_LOGI(TAG, "Sending to IPV4 multicast address %s:%d...",  addrbuf, UDP_PORT);
+                ESP_LOGI(TAG, "Sending to IPV4 multicast address %s:%d... \t %s",  addrbuf, UDP_PORT, sendbuf);
                 err = sendto(sock, sendbuf, len, 0, res->ai_addr, res->ai_addrlen);
                 freeaddrinfo(res);
                 if (err < 0) {
@@ -905,7 +927,7 @@ static void mcast_example_task(void *pvParameters)
                     break;
                 }
             }
-        */
+
         }
 
         ESP_LOGE(TAG, "Shutting down socket and restarting...");
@@ -956,6 +978,7 @@ static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if)
 
 static int create_multicast_ipv4_socket(void)
 {
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     struct sockaddr_in saddr = { 0 };
     int sock = -1;
     int err = 0;
@@ -1002,6 +1025,7 @@ static int create_multicast_ipv4_socket(void)
 
 static void prvSimpleOtaExample(void*)
 {
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     ESP_LOGI(TAG, "Starting OTA example");
 
     esp_http_client_config_t config = {
@@ -1053,10 +1077,10 @@ extern "C" void app_main()
     spi.begin(MOSI, MISO, SCLK);
     
     // Create UDP Multicast task for syncing 
-    // xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 5, NULL);
+    xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 5, NULL);
     
     // Create UDP task to receive commands from host 
-    xTaskCreate(udp_rx_commands_task, "udp_rx_cmd", 4096, NULL, 5, &udp_cmd_task_handle);
+    // xTaskCreate(udp_rx_commands_task, "udp_rx_cmd", 4096, NULL, 5, &udp_cmd_task_handle);
 
     // Create a task to setup mpu and read sensor data
     xTaskCreate(mpuTask, "mpuTask", 4 * 2048, NULL, 6, &mpu_task_handle);   
