@@ -357,100 +357,105 @@ static void provision_wifi()
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    /* Configuration for the provisioning manager */
-    wifi_prov_mgr_config_t config = {
-        .scheme = wifi_prov_scheme_ble,
-        .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM
-    };
-
-    /* Initialize provisioning manager with the
-     * configuration parameters set above */
-    ESP_ERROR_CHECK(wifi_prov_mgr_init(config));
-
-    bool provisioned = false;
-    /* Let's find out if the device is provisioned */
-    ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
-
-    /* If device is not yet provisioned start provisioning service */
-    if (!provisioned) {
-        ESP_LOGI(TAG, "Starting provisioning");
-
-        /* What is the Device Service Name that we want
-         * This translates to :
-         *     - Wi-Fi SSID when scheme is wifi_prov_scheme_softap
-         *     - device name when scheme is wifi_prov_scheme_ble
-         */
-        char service_name[12];
-        get_device_service_name(service_name, sizeof(service_name));
-
-        /* What is the security level that we want (0 or 1):
-         *      - WIFI_PROV_SECURITY_0 is simply plain text communication.
-         *      - WIFI_PROV_SECURITY_1 is secure communication which consists of secure handshake
-         *          using X25519 key exchange and proof of possession (pop) and AES-CTR
-         *          for encryption/decryption of messages.
-         */
-        wifi_prov_security_t security = WIFI_PROV_SECURITY_1;
-
-        /* Do we want a proof-of-possession (ignored if Security 0 is selected):
-         *      - this should be a string with length > 0
-         *      - NULL if not used
-         */
-        const char *pop = "abcd1234";
-
-        /* What is the service key (could be NULL)
-         * This translates to :
-         *     - Wi-Fi password when scheme is wifi_prov_scheme_softap
-         *     - simply ignored when scheme is wifi_prov_scheme_ble
-         */
-        const char *service_key = NULL;
-
-        /* This step is only useful when scheme is wifi_prov_scheme_ble. This will
-         * set a custom 128 bit UUID which will be included in the BLE advertisement
-         * and will correspond to the primary GATT service that provides provisioning
-         * endpoints as GATT characteristics. Each GATT characteristic will be
-         * formed using the primary service UUID as base, with different auto assigned
-         * 12th and 13th bytes (assume counting starts from 0th byte). The client side
-         * applications must identify the endpoints by reading the User Characteristic
-         * Description descriptor (0x2901) for each characteristic, which contains the
-         * endpoint name of the characteristic */
-        uint8_t custom_service_uuid[] = {
-            /* LSB <---------------------------------------
-             * ---------------------------------------> MSB */
-            0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
-            0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
+    #ifndef DISABLE_BT_PROV
+        /* Configuration for the provisioning manager */
+        wifi_prov_mgr_config_t config = {
+            .scheme = wifi_prov_scheme_ble,
+            .scheme_event_handler = WIFI_PROV_SCHEME_BLE_EVENT_HANDLER_FREE_BTDM
         };
-        wifi_prov_scheme_ble_set_service_uuid(custom_service_uuid);
 
-        /* An optional endpoint that applications can create if they expect to
-         * get some additional custom data during provisioning workflow.
-         * The endpoint name can be anything of your choice.
-         * This call must be made before starting the provisioning.
-         */
-        // wifi_prov_mgr_endpoint_create("custom-data");
-        /* Start provisioning service */
-        ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(security, pop, service_name, service_key));
+        /* Initialize provisioning manager with the
+        * configuration parameters set above */
+        ESP_ERROR_CHECK(wifi_prov_mgr_init(config));
 
-        /* The handler for the optional endpoint created above.
-         * This call must be made after starting the provisioning, and only if the endpoint
-         * has already been created above.
-         */
-        // wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler, NULL);
+        bool provisioned = false;
+        /* Let's find out if the device is provisioned */
+        ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
 
-        /* Uncomment the following to wait for the provisioning to finish and then release
-         * the resources of the manager. Since in this case de-initialization is triggered
-         * by the default event loop handler, we don't need to call the following */
-        // wifi_prov_mgr_wait();
-        // wifi_prov_mgr_deinit();
-    } else {
-        ESP_LOGI(TAG, "Already provisioned, starting Wi-Fi STA");
+        /* If device is not yet provisioned start provisioning service */
+        if (!provisioned) {
+            ESP_LOGI(TAG, "Starting provisioning");
 
-        /* We don't need the manager as device is already provisioned,
-         * so let's release it's resources */
-        wifi_prov_mgr_deinit();
+            /* What is the Device Service Name that we want
+            * This translates to :
+            *     - Wi-Fi SSID when scheme is wifi_prov_scheme_softap
+            *     - device name when scheme is wifi_prov_scheme_ble
+            */
+            char service_name[12];
+            get_device_service_name(service_name, sizeof(service_name));
 
-        /* Start Wi-Fi station */
+            /* What is the security level that we want (0 or 1):
+            *      - WIFI_PROV_SECURITY_0 is simply plain text communication.
+            *      - WIFI_PROV_SECURITY_1 is secure communication which consists of secure handshake
+            *          using X25519 key exchange and proof of possession (pop) and AES-CTR
+            *          for encryption/decryption of messages.
+            */
+            wifi_prov_security_t security = WIFI_PROV_SECURITY_1;
+
+            /* Do we want a proof-of-possession (ignored if Security 0 is selected):
+            *      - this should be a string with length > 0
+            *      - NULL if not used
+            */
+            const char *pop = "abcd1234";
+
+            /* What is the service key (could be NULL)
+            * This translates to :
+            *     - Wi-Fi password when scheme is wifi_prov_scheme_softap
+            *     - simply ignored when scheme is wifi_prov_scheme_ble
+            */
+            const char *service_key = NULL;
+
+            /* This step is only useful when scheme is wifi_prov_scheme_ble. This will
+            * set a custom 128 bit UUID which will be included in the BLE advertisement
+            * and will correspond to the primary GATT service that provides provisioning
+            * endpoints as GATT characteristics. Each GATT characteristic will be
+            * formed using the primary service UUID as base, with different auto assigned
+            * 12th and 13th bytes (assume counting starts from 0th byte). The client side
+            * applications must identify the endpoints by reading the User Characteristic
+            * Description descriptor (0x2901) for each characteristic, which contains the
+            * endpoint name of the characteristic */
+            uint8_t custom_service_uuid[] = {
+                /* LSB <---------------------------------------
+                * ---------------------------------------> MSB */
+                0xb4, 0xdf, 0x5a, 0x1c, 0x3f, 0x6b, 0xf4, 0xbf,
+                0xea, 0x4a, 0x82, 0x03, 0x04, 0x90, 0x1a, 0x02,
+            };
+            wifi_prov_scheme_ble_set_service_uuid(custom_service_uuid);
+
+            /* An optional endpoint that applications can create if they expect to
+            * get some additional custom data during provisioning workflow.
+            * The endpoint name can be anything of your choice.
+            * This call must be made before starting the provisioning.
+            */
+            // wifi_prov_mgr_endpoint_create("custom-data");
+            /* Start provisioning service */
+            ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(security, pop, service_name, service_key));
+
+            /* The handler for the optional endpoint created above.
+            * This call must be made after starting the provisioning, and only if the endpoint
+            * has already been created above.
+            */
+            // wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler, NULL);
+
+            /* Uncomment the following to wait for the provisioning to finish and then release
+            * the resources of the manager. Since in this case de-initialization is triggered
+            * by the default event loop handler, we don't need to call the following */
+            // wifi_prov_mgr_wait();
+            // wifi_prov_mgr_deinit();
+        } 
+        else {
+            ESP_LOGI(TAG, "Already provisioned, starting Wi-Fi STA");
+
+            /* We don't need the manager as device is already provisioned,
+            * so let's release it's resources */
+            wifi_prov_mgr_deinit();
+
+            /* Start Wi-Fi station */
+            wifi_init_sta();
+        }
+    #else
         wifi_init_sta();
-    }
+    #endif
 
     /* Wait for Wi-Fi connection */
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, false, true, portMAX_DELAY);
@@ -802,6 +807,7 @@ static void udp_rx_commands_task(void * fn)
 static void mcast_example_task(void *pvParameters)
 {
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
+    EventBits_t udp_cmd_bits;
     while (1) {
         
         gpio_set_direction((gpio_num_t)SYNC_PIN, GPIO_MODE_INPUT_OUTPUT);
@@ -870,15 +876,30 @@ static void mcast_example_task(void *pvParameters)
                         }
                         recvbuf[len] = 0; // Null-terminate whatever we received and treat like a string...
                         ESP_LOGI(TAG, "received %d bytes from %s:", len, raddr_name);
+                        // INTERPRET COMMAND 
+                        // Start measurement
                         if (strncmp(recvbuf, "rec_start", 9) == 0) {
                             ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
                             xEventGroupSetBits(command_event_group, StartMeasurement_BIT);
-                        }                
+                        }
+                        // Stop measurement                
                         else if (strncmp(recvbuf, "rec_stop", 8) == 0)
                         {
                             ESP_LOGI(TAG, "Received Stop Command. Clearing Event Bit.");
                             xEventGroupClearBits(command_event_group, StartMeasurement_BIT);
                         }
+                        // OTA sensor update
+                        else if (strncmp(recvbuf, "update_sensor", 13) == 0)
+                        {
+                            if(xEventGroupGetBits(command_event_group)&IsMeasuring_BIT){
+                                ESP_LOGI(TAG, "Update cannot be started. Measurement in progress...");
+                            }
+                            else{
+                                ESP_LOGI(TAG, "Received OTA Update Command. Setting Event Bit.");
+                                xEventGroupSetBits(command_event_group, ucOTAUptateStart);
+                            }                                
+                        }
+                        // END INTERPRET COMMAND 
                         ESP_LOGI(TAG, "%s; %d", recvbuf, sync_status);
                     }
                 }
@@ -1022,26 +1043,28 @@ static int create_multicast_ipv4_socket(void)
     return sock;
 }
 
-
 static void prvSimpleOtaExample(void*)
 {
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
-    ESP_LOGI(TAG, "Starting OTA example");
+    ESP_LOGI(TAG, "Starting OTA task");
 
     esp_http_client_config_t config = {
-        .url = "https://192.168.178.68:8070/simple_ota_example.bin",
-        .cert_pem = NULL, // (char *)server_cert_pem_start,
+        .url = "https://192.168.178.68:8070/sensor_firmware/firmware.bin",
+        .cert_pem = (char *)server_cert_pem_start,
         .event_handler = _http_event_handler,
     };
 
     while (1){
-        if (0){ // TODO: Implement proper condition 
-            vTaskSuspendAll();
+        ESP_LOGI(TAG, "Waiting...");
+        if(xEventGroupGetBits(command_event_group)&ucOTAUptateStart){
+            ESP_LOGI(TAG, "Updating...");
+            // vTaskSuspendAll();
             esp_err_t ret = esp_https_ota(&config);
             if (ret == ESP_OK) {
                 esp_restart();
             } else {
                 ESP_LOGE(TAG, "Firmware upgrade failed");
+                xEventGroupClearBits(command_event_group, ucOTAUptateStart);
             }
         }
         vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -1068,9 +1091,10 @@ extern "C" void app_main()
     prvMountSDCard();
 
     // provision WiFi and connect 
-    provision_wifi();
+    provision_wifi(); // approx. 633712 Bytes 
 
     // Create OTA update task 
+    // approx. 135760 Bytes
     xTaskCreate(&prvSimpleOtaExample, "ota_update_task", 8192, NULL, 5, NULL);
 
     // Initialize bus through either the Library API or esp-idf API
