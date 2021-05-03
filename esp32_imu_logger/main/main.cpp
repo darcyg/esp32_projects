@@ -4,16 +4,17 @@
 
 /* Tasks */
 
-static IRAM_ATTR void mpuISR(TaskHandle_t taskHandle)
+static IRAM_ATTR void icmISR(TaskHandle_t taskHandle)
 {
     BaseType_t HPTaskWoken = pdFALSE;
     int64_t sys_ticks = esp_timer_get_time();
     vTaskNotifyGiveFromISR(taskHandle, &HPTaskWoken);
-    xQueueSendToBackFromISR(mpu_ticks_queue, &sys_ticks, &HPTaskWoken);
+    xQueueSendToBackFromISR(icm_ticks_queue, &sys_ticks, &HPTaskWoken);
     if (HPTaskWoken == pdTRUE) portYIELD_FROM_ISR();
 }
 
-static void mpuTask(void*)
+
+static void prvICMTask(void*)
 {   
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     EventBits_t udp_cmd_bits;
@@ -24,54 +25,52 @@ static void mpuTask(void*)
     gpio_set_direction((gpio_num_t)LOG_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)LOG_PIN, 1);
 
-    // Let MPU know which bus and address to use
+    // Let ICM know which bus and address to use
 
-    MPU.setBus(spi);
-    spi_device_handle_t mpu_spi_handle;
-    spi_device_handle_t mpu_spi_handle_hs;
-    spi.addDevice(0, CLOCK_SPEED_HIGH, -1, &mpu_spi_handle_hs, mpu_spi_pre_transfer_callback, mpu_spi_post_transfer_callback);
-    spi.addDevice(0, CLOCK_SPEED_LOW, -1, &mpu_spi_handle, mpu_spi_pre_transfer_callback, mpu_spi_post_transfer_callback);
-    MPU.setAddr(mpu_spi_handle);
-    MPU.setAddr_hs(mpu_spi_handle_hs);
+    ICM.setBus(spi);
+    spi_device_handle_t icm_spi_handle;
+    spi.addDevice(0, SPI_CLOCK_SPEED, -1, &icm_spi_handle, icm_spi_pre_transfer_callback, icm_spi_post_transfer_callback);
+    ICM.setAddr(icm_spi_handle);
     // Verify connection
-    while (esp_err_t err = MPU.testConnection()) {
-        ESP_LOGE(TAG, "Failed to connect to the MPU, error=%#X", err);
+    while (esp_err_t err = ICM.testConnection()) {
+        ESP_LOGE(TAG, "Failed to connect to the ICM, error=%#X", err);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    ESP_LOGI(TAG, "MPU connection successful!");
+    ESP_LOGI(TAG, "ICM connection successful!");
 
     // Initialize
-    ESP_ERROR_CHECK(MPU.initialize());
+    ESP_ERROR_CHECK(ICM.initialize());
 
     // Self-Test
-    mpud::selftest_t retSelfTest;
-    while (esp_err_t err = MPU.selfTest(&retSelfTest)) {
-        ESP_LOGE(TAG, "Failed to perform MPU Self-Test, error=%#X", err);
+    icm20601::selftest_t retSelfTest;
+    while (esp_err_t err = ICM.selfTest(&retSelfTest)) {
+        ESP_LOGE(TAG, "Failed to perform ICM Self-Test, error=%#X", err);
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    ESP_LOGI(TAG, "MPU Self-Test result: Gyro=%s Accel=%s",  //
-             (retSelfTest & mpud::SELF_TEST_GYRO_FAIL ? "FAIL" : "OK"),
-             (retSelfTest & mpud::SELF_TEST_ACCEL_FAIL ? "FAIL" : "OK"));
+    ESP_LOGI(TAG, "ICM Self-Test result: Gyro=%s Accel=%s",  //
+             (retSelfTest & icm20601::SELF_TEST_GYRO_FAIL ? "FAIL" : "OK"),
+             (retSelfTest & icm20601::SELF_TEST_ACCEL_FAIL ? "FAIL" : "OK"));
 
     // Calibrate
-    mpud::raw_axes_t accelBias, gyroBias;
-    ESP_ERROR_CHECK(MPU.computeOffsets(&accelBias, &gyroBias));
-    // ESP_ERROR_CHECK(MPU.setAccelOffset(accelBias));
-    ESP_ERROR_CHECK(MPU.setGyroOffset(gyroBias));
+    icm20601::raw_axes_t accelBias, gyroBias;
+    ESP_ERROR_CHECK(ICM.computeOffsets(&accelBias, &gyroBias));
+    // ESP_ERROR_CHECK(ICM.setAccelOffset(accelBias));
+    ESP_ERROR_CHECK(ICM.setGyroOffset(gyroBias));
 
     // Configure
-    ESP_ERROR_CHECK(MPU.setAccelFullScale(kAccelFS));
-    ESP_ERROR_CHECK(MPU.setGyroFullScale(kGyroFS));
-    ESP_ERROR_CHECK(MPU.setSampleRate(kSampleRate));
-    ESP_ERROR_CHECK(MPU.setDigitalLowPassFilter(kDLPF));
+    ESP_ERROR_CHECK(ICM.setAccelFullScale(kAccelFS));
+    ESP_ERROR_CHECK(ICM.setGyroFullScale(kGyroFS));
+    ESP_ERROR_CHECK(ICM.setSampleRate(kSampleRate));
+    ESP_ERROR_CHECK(ICM.setDigitalLowPassFilter(kDLPF));
 
     // Setup FIFO
-    ESP_ERROR_CHECK(MPU.setFIFOConfig(mpud::FIFO_CFG_ACCEL | mpud::FIFO_CFG_GYRO));
-    ESP_ERROR_CHECK(MPU.setFIFOEnabled(true));
+    ESP_ERROR_CHECK(ICM.setFIFOConfig(icm20601::FIFO_CFG_ACCEL | icm20601::FIFO_CFG_GYRO));
+    ESP_ERROR_CHECK(ICM.setFIFOEnabled(true));
+
     // # # # # # # # # # # 
     // Interrupt Setup
     // # # # # # # # # # # 
-    // set the number of data-ready interrupts of mpu to wait before actually doing something 
+    // set the number of data-ready interrupts of ICM to wait before actually doing something 
     // this way constantly checking the fifo count isn't necessary
     uint32_t n_interrupts_wait = (uint32_t)(kFIFOSize/kFIFOPacketSize*0.85);
     ESP_LOGI(TAG, "n_interrupts_wait: %d\n",n_interrupts_wait);
@@ -85,21 +84,21 @@ static void mpuTask(void*)
     };
     gpio_config(&kGPIOConfig);
     gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-    gpio_isr_handler_add((gpio_num_t) kInterruptPin, mpuISR, xTaskGetCurrentTaskHandle());
-    ESP_ERROR_CHECK(MPU.setInterruptConfig(kInterruptConfig));
-    ESP_ERROR_CHECK(MPU.setInterruptEnabled(mpud::INT_EN_RAWDATA_READY));
+    gpio_isr_handler_add((gpio_num_t) kInterruptPin, icmISR, xTaskGetCurrentTaskHandle());
+    ESP_ERROR_CHECK(ICM.setInterruptConfig(kInterruptConfig));
+    ESP_ERROR_CHECK(ICM.setInterruptEnabled(icm20601::INT_EN_RAWDATA_READY));
     // # # # # # # # # # # 
     // END Interrupt Setup 
     // # # # # # # # # # # 
 
     // Ready to start reading
-    ESP_ERROR_CHECK(MPU.resetFIFO());  // start clean
-    xQueueReset(mpu_ticks_queue);
+    ESP_ERROR_CHECK(ICM.resetFIFO());  // start clean
+    xQueueReset(icm_ticks_queue);
 
     uint32_t notificationValue = 0;  // n notifications. Increased from ISR; reset from this task
     // Reading Loop
     while (true) {
-        // Wait for notification from mpuISR
+        // Wait for notification from icmISR
         xTaskNotifyWait(0, 0, &notificationValue, portMAX_DELAY);
         if (notificationValue < (n_interrupts_wait-1)) { 
             // ESP_LOGW(TAG, "Task Notification value: %d", notificationValue);
@@ -112,10 +111,10 @@ static void mpuTask(void*)
         notificationValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
         // Check FIFO count
-        uint16_t fifocount = MPU.getFIFOCount();
-        if (esp_err_t err = MPU.lastError()) {
+        uint16_t fifocount = ICM.getFIFOCount();
+        if (esp_err_t err = ICM.lastError()) {
             ESP_LOGE(TAG, "Error reading fifo count, %#X", err);
-            MPU.resetFIFO();
+            ICM.resetFIFO();
             continue;
         }
         // ESP_LOGI(TAG, "FIFO count: %d", fifocount);  max. 512
@@ -126,9 +125,9 @@ static void mpuTask(void*)
         // Push data into data_frame 
         // Burst read data from FIFO
         struct DataFrame data_frame; 
-        if (esp_err_t err = MPU.readFIFO_HS(fifocount, data_frame.SensorReads)) {
+        if (esp_err_t err = ICM.readFIFO(fifocount, data_frame.SensorReads)) {
             ESP_LOGE(TAG, "Error reading sensor data, %#X", err);
-            MPU.resetFIFO();
+            ICM.resetFIFO();
             continue;
         }
         // write number of bytes read from the fifo to the data packet 
@@ -137,13 +136,13 @@ static void mpuTask(void*)
         // uint64_t TICKpacket[(int)(kFIFOSize/kFIFOPacketSize)];
         // data_frame.Timestamps
         uint8_t i_tick = 0; 
-        // TODO: assert uxQueueMessagesWaiting(mpu_ticks_queue) == data_frame.n_samples
-        while(uxQueueMessagesWaiting(mpu_ticks_queue)){
-            xQueueReceive(mpu_ticks_queue, &data_frame.Timestamps[i_tick], 1000/portTICK_PERIOD_MS);
+        // TODO: assert uxQueueMessagesWaiting(icm_ticks_queue) == data_frame.n_samples
+        while(uxQueueMessagesWaiting(icm_ticks_queue)){
+            xQueueReceive(icm_ticks_queue, &data_frame.Timestamps[i_tick], 1000/portTICK_PERIOD_MS);
             i_tick ++;
         }
         
-        MPU.resetFIFO();
+        ICM.resetFIFO();
         // Send data to queue only if measurement is started
         udp_cmd_bits = xEventGroupGetBits(command_event_group); 
 
@@ -152,16 +151,17 @@ static void mpuTask(void*)
                 ESP_LOGE(TAG, "Writing to queue faled.");
             }
             else{
-                xEventGroupSetBits(status_event_group, ucMPUWriting_BIT);
+                xEventGroupSetBits(status_event_group, ucICMWriting_BIT);
             }
         }
         else{
-            xEventGroupClearBits(status_event_group, ucMPUWriting_BIT);
+            xEventGroupClearBits(status_event_group, ucICMWriting_BIT);
             // ESP_LOGW(TAG, "Measurement not started yet...");
         }            
     }
     vTaskDelete(nullptr);
 }
+
 
 static void prvMountSDCard(void)
 {
@@ -246,7 +246,7 @@ static void prvWriteFileSD(void*)
     while (true) {
         // Try to read from queue only if data is being written or there are messages left in the queue
         xStatusBits = xEventGroupGetBits(command_event_group); 
-        if((xStatusBits & ucMPUWriting_BIT) | uxQueueMessagesWaiting(data_queue)){
+        if((xStatusBits & ucICMWriting_BIT) | uxQueueMessagesWaiting(data_queue)){
             if(!data_written){
                 ESP_LOGI(TAG, "Writing data..."); 
             }
@@ -480,7 +480,7 @@ static void get_device_service_name(char *service_name, size_t max)
 
 
 // # # # # # # # # # # 
-// TCP STUFF
+// TCP FILE TRANSMIT 
 // # # # # # # # # # # 
 
 static void prvTransmitFileTCP(void*)
@@ -560,10 +560,10 @@ static void prvTransmitFileTCP(void*)
                     float tcp_packet[pDataBuffer.n_samples][7];
                     i_frame ++;
                     uint32_t ulTime_us; 
-                    mpud::raw_axes_t accelRaw;  // accel raw axes 
-                    mpud::raw_axes_t gyroRaw;  // gyro raw axes 
-                    mpud::float_axes_t accelG;   // accel axes in (g) gravity format
-                    mpud::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
+                    icm20601::raw_axes_t accelRaw;  // accel raw axes 
+                    icm20601::raw_axes_t gyroRaw;  // gyro raw axes 
+                    icm20601::float_axes_t accelG;   // accel axes in (g) gravity format
+                    icm20601::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
                     for(uint8_t i=0; i <= pDataBuffer.n_samples-1; i++){
                         if(t_0 == 0){
                             t_0 = pDataBuffer.Timestamps[i];
@@ -576,8 +576,8 @@ static void prvTransmitFileTCP(void*)
                         gyroRaw.y  = pDataBuffer.SensorReads[8+i*12] << 8 | pDataBuffer.SensorReads[9+i*12];
                         gyroRaw.z  = pDataBuffer.SensorReads[10+i*12] << 8 | pDataBuffer.SensorReads[11+i*12];
                         
-                        accelG = mpud::accelGravity(accelRaw, kAccelFS);
-                        gyroDPS = mpud::gyroDegPerSec(gyroRaw, kGyroFS);
+                        accelG = icm20601::accelGravity(accelRaw, kAccelFS);
+                        gyroDPS = icm20601::gyroDegPerSec(gyroRaw, kGyroFS);
 
                         tcp_packet[i][0] = (float)(ulTime_us/1000.0);
                         tcp_packet[i][1] = accelG.x;
@@ -637,171 +637,8 @@ static void prvTransmitFileTCP(void*)
     vTaskDelete(xHandleTransmitFileTCP);
 }
 
-
 // # # # # # # # # # # 
-// UDP STUFF
-// # # # # # # # # # # 
-
-static void udp_tx_sensor_data(void *pvParameters)
-{
-    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
-    while (1) {
-        struct sockaddr_in dest_addr;
-        dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(PORT);
-        int addr_family = AF_INET;
-        int ip_protocol = IPPROTO_IP;
-
-
-        int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
-        if (sock < 0) {
-            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-            break;
-        }
-        ESP_LOGI(TAG, "Socket created, sending to %s:%d", HOST_IP_ADDR, PORT);
-        uint8_t i = 0; 
-        float QuatPackage[40];
-        while (1) {
-            float quaternion_frame[4];
-            // Check sensor_data_queue and read package/s 
-            if(xQueueReceive(data_queue, (void*) quaternion_frame, 10000/portTICK_PERIOD_MS)!=pdTRUE){
-                ESP_LOGE(TAG, "Reading from queue faled. \n");
-            }
-            QuatPackage[(i*4)+0] = quaternion_frame[0];
-            QuatPackage[(i*4)+1] = quaternion_frame[1];
-            QuatPackage[(i*4)+2] = quaternion_frame[2];
-            QuatPackage[(i*4)+3] = quaternion_frame[3];
-
-            if (i==9){
-                // Send package to host 
-                int err = sendto(sock, QuatPackage, sizeof(QuatPackage), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-                if (err < 0) {
-                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                    break;
-                }
-                i = 0; 
-            }
-            else{
-                i++;
-            }
-            
-            
-            /*
-            struct sockaddr_in source_addr; // Large enough for both IPv4 or IPv6
-            socklen_t socklen = sizeof(source_addr);
-            int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
-
-            // Error occurred during receiving
-            if (len < 0) {
-                ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
-                break;
-            }
-            // Data received
-            else {
-                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-                ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
-                ESP_LOGI(TAG, "%s", rx_buffer);
-                if (strncmp(rx_buffer, "OK: ", 4) == 0) {
-                    ESP_LOGI(TAG, "Received expected message, reconnecting");
-                    break;
-                }
-            }
-            */
-        }
-
-        if (sock != -1) {
-            ESP_LOGE(TAG, "Shutting down socket and restarting...");
-            shutdown(sock, 0);
-            close(sock);
-        }
-    }
-    vTaskDelete(NULL);
-}
-
-static void udp_rx_commands_task(void * fn)
-{
-    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
-    char rx_buffer[128];
-    char host_ip[] = HOST_IP_ADDR;
-    int addr_family = 0;
-    int ip_protocol = 0;
-    static const char *payload = "Ready!";
-    int err = 0;
-
-    while (1) {
-        struct sockaddr_in dest_addr;
-        dest_addr.sin_addr.s_addr = inet_addr(HOST_IP_ADDR);
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(COMMAND_PORT);
-        addr_family = AF_INET;
-        ip_protocol = IPPROTO_IP;
-        
-
-        int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
-        if (sock < 0) {
-            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-            break;
-        }
-        
-        err = bind(sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in));
-
-        struct timeval tv;
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
-        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,&tv,sizeof(tv)) < 0) {
-            ESP_LOGE(TAG, "Unable to set socket option: errno %d", errno);
-        }
-
-
-        ESP_LOGI(TAG, "Socket created, sending to %s:%d", HOST_IP_ADDR, COMMAND_PORT);
-
-        while (1) {
-
-            int err = sendto(sock, payload, strlen(payload), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-            if (err < 0) {
-                ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                break;
-            }
-            // ESP_LOGI(TAG, "Message sent");
-
-            struct sockaddr_storage source_addr; // Large enough for both IPv4 or IPv6
-            socklen_t socklen = sizeof(source_addr);
-            int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
-
-            // Error occurred during receiving
-            if (len < 0) {
-                // ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
-                // break;
-            }
-            // Data received
-            else {
-                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-                ESP_LOGI(TAG, "Received %d bytes from %s: %s", len, host_ip, rx_buffer);
-                if (strncmp(rx_buffer, "rec_start", 9) == 0) {
-                    ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
-                    xEventGroupSetBits(command_event_group, StartMeasurement_BIT);
-                }                
-                else if (strncmp(rx_buffer, "rec_stop", 8) == 0)
-                {
-                    ESP_LOGI(TAG, "Received Stop Command. Clearing Event Bit.");
-                    xEventGroupClearBits(command_event_group, StartMeasurement_BIT);
-                }
-                
-            }
-        }
-
-        if (sock != -1) {
-            ESP_LOGE(TAG, "Shutting down socket and restarting...");
-            shutdown(sock, 0);
-            close(sock);
-        }
-    }
-    vTaskDelete(udp_cmd_task_handle);
-}
-
-// # # # # # # # # # # 
-// MULTICAST STUFF
+// UDP MULTICAST
 // # # # # # # # # # # 
 
 static void mcast_example_task(void *pvParameters)
@@ -1072,20 +909,21 @@ static void prvSimpleOtaExample(void*)
 }
 
 
-
 // # # # # # # # # # # # # # # # # # # 
 // Main
 // # # # # # # # # # # # # # # # # # # 
 
 extern "C" void app_main()
 {   
+
+    ESP_LOGI(TAG, "IMU Logger starting...");
     // first of all create event groups for inter-task communication 
     status_event_group = xEventGroupCreate(); 
     command_event_group = xEventGroupCreate(); 
 
     // Create queues to store sensor readings and system ticks of the readings 
     data_queue = xQueueCreate(5, sizeof(struct DataFrame));
-    mpu_ticks_queue = xQueueCreate(kFIFOReadsMax, sizeof(int64_t));
+    icm_ticks_queue = xQueueCreate(kFIFOReadsMax, sizeof(int64_t));
 
     // Set up file system 
     prvMountSDCard();
@@ -1102,14 +940,7 @@ extern "C" void app_main()
     
     // Create UDP Multicast task for syncing 
     xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 5, NULL);
-    
-    // Create UDP task to receive commands from host 
-    // xTaskCreate(udp_rx_commands_task, "udp_rx_cmd", 4096, NULL, 5, &udp_cmd_task_handle);
 
-    // Create a task to setup mpu and read sensor data
-    xTaskCreate(mpuTask, "mpuTask", 4 * 2048, NULL, 6, &mpu_task_handle);   
-
-    // Create task to write the file 
-    xTaskCreate(prvWriteFileSD, "WriteFile", 2 * 2048, NULL, 0, &xHandleWriteFileSD);    
-
+    // Create a task to setup ICM and read sensor data
+    xTaskCreate(prvICMTask, "icmTask", 4 * 2048, NULL, 6, &icm_task_handle);   
 }

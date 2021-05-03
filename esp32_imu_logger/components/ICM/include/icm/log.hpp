@@ -4,17 +4,9 @@
 // For the license information refer to LICENSE file in root directory.
 // =========================================================================
 
-/**
- * @file mpu/log.hpp
- * @brief MPU Log System
- * 
- * @attention
- *  This header is intended to be used ONLY inside the library itself
- *  Do not include this header in your application.
- * */
 
-#ifndef _MPU_LOG_HPP_
-#define _MPU_LOG_HPP_
+#ifndef _ICM_LOG_HPP_
+#define _ICM_LOG_HPP_
 
 #include "esp_err.h"
 #include "esp_log.h"
@@ -23,23 +15,23 @@
 // Note: declare TAG before include this header
 // Note: include only in .cpp files from this library
 
-#define MPU_LOGE(format, ...) { ESP_LOGE(TAG, format, ##__VA_ARGS__); }
-#define MPU_LOGW(format, ...) { ESP_LOGW(TAG, format, ##__VA_ARGS__); }
-#define MPU_LOGI(format, ...) { ESP_LOGI(TAG, format, ##__VA_ARGS__); }
-#define MPU_LOGD(format, ...) { ESP_LOGD(TAG, format, ##__VA_ARGS__); }
-#define MPU_LOGV(format, ...) { ESP_LOGV(TAG, format, ##__VA_ARGS__); }
+#define ICM_LOGE(format, ...) { ESP_LOGE(TAG, format, ##__VA_ARGS__); }
+#define ICM_LOGW(format, ...) { ESP_LOGW(TAG, format, ##__VA_ARGS__); }
+#define ICM_LOGI(format, ...) { ESP_LOGI(TAG, format, ##__VA_ARGS__); }
+#define ICM_LOGD(format, ...) { ESP_LOGD(TAG, format, ##__VA_ARGS__); }
+#define ICM_LOGV(format, ...) { ESP_LOGV(TAG, format, ##__VA_ARGS__); }
 
-#define MPU_LOGEMSG(msg, format, ...) MPU_LOGE("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
-#define MPU_LOGWMSG(msg, format, ...) MPU_LOGW("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
-#define MPU_LOGIMSG(msg, format, ...) MPU_LOGI("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
-#define MPU_LOGDMSG(msg, format, ...) MPU_LOGD("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
-#define MPU_LOGVMSG(msg, format, ...) MPU_LOGV("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
+#define ICM_LOGEMSG(msg, format, ...) ICM_LOGE("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
+#define ICM_LOGWMSG(msg, format, ...) ICM_LOGW("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
+#define ICM_LOGIMSG(msg, format, ...) ICM_LOGI("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
+#define ICM_LOGDMSG(msg, format, ...) ICM_LOGD("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
+#define ICM_LOGVMSG(msg, format, ...) ICM_LOGV("%s()-> %s" format, __FUNCTION__, msg, ##__VA_ARGS__)
 
 
-#define MPU_ERR_CHECK(x) (x)
+#define ICM_ERR_CHECK(x) (x)
 
-/*! MPU Driver namespace */
-namespace mpud
+/*! ICM 20601 Driver namespace */
+namespace icm20601
 {
 /*! Log namespace */
 inline namespace log
@@ -71,12 +63,12 @@ static const char EMPTY[]                 = "";
 
 static inline esp_err_t errorCheckLogger(esp_err_t x, const char* func, const int line, const char* expr)
 {
-    if (x) MPU_LOGE("func:%s @ line:%d, expr:\"%s\", error:0x%X ", func, line, expr, x);
+    if (x) ICM_LOGE("func:%s @ line:%d, expr:\"%s\", error:0x%X ", func, line, expr, x);
     return x;
 }
 
 }  // namespace log
 
-}  // namespace mpud
+}  // namespace icm20601
 
-#endif /* end of include guard: _MPU_LOG_HPP_ */
+#endif /* end of include guard: _ICM_LFOG_HPP_ */

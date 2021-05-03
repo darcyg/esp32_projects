@@ -1,28 +1,22 @@
-// =========================================================================
-// This library is placed under the MIT License
-// Copyright 2017-2018 Natanael Josue Rabello. All rights reserved.
-// For the license information refer to LICENSE file in root directory.
-// =========================================================================
-
 /**
- * @file mpu/registers.hpp
- * Define registers' for all MPU models.
+ * @file icm/registers.hpp
+ * Define registers' for ICM 20601 (and 20498).
  */
 
-#ifndef _MPU_REGISTERS_HPP_
-#define _MPU_REGISTERS_HPP_
+#ifndef _ICM_REGISTERS_HPP_
+#define _ICM_REGISTERS_HPP_
 
 #include <stdint.h>
 #include "sdkconfig.h"
 
-/*! MPU Driver namespace */
-namespace mpud
+/*! ICM 20601 Driver namespace */
+namespace icm20601
 {
 /*! Registers namespace */
 namespace regs
 {
 /*******************************************************************************
- * MPU commom registers for all models
+ * ICM commom registers for all models
  ******************************************************************************/
 constexpr uint8_t XG_OFFSET_H = (0x13);
 constexpr uint8_t XG_OFFSET_L = (0x14);
@@ -60,9 +54,6 @@ constexpr uint8_t ACONFIG_HPF_LENGTH    = (3);
 constexpr uint8_t FF_THR       = (0x1D);
 constexpr uint8_t FF_DUR       = (0x1E);
 constexpr uint8_t MOTION_THR   = (0x1F);  // [7:0] // MPU9250_REG_WOM_THR
-constexpr uint8_t MOTION_DUR   = (0x20);
-constexpr uint8_t ZRMOTION_THR = (0x21);
-constexpr uint8_t ZRMOTION_DUR = (0x22);
 //------------------------------------------------------------------------------
 constexpr uint8_t FIFO_EN           = (0x23);
 constexpr uint8_t FIFO_TEMP_EN_BIT  = (7);
@@ -301,60 +292,8 @@ constexpr uint8_t YA_OFFSET_L = (0x7B);
 constexpr uint8_t ZA_OFFSET_H = (0x7D);
 constexpr uint8_t ZA_OFFSET_L = (0x7E);
 
-/*******************************************************************************
- * MPU9150 and MPU9250 Magnetometer registers (AK89xx)
- ******************************************************************************/
-/*! Magnetometer Registers namespace */
-namespace mag
-{
-constexpr uint8_t WHO_I_AM = (0x00);
-constexpr uint8_t INFO     = (0x01);
-//------------------------------------------------------------------------------
-constexpr uint8_t STATUS1              = (0x02);
-constexpr uint8_t STATUS1_DATA_RDY_BIT = (0);
-//------------------------------------------------------------------------------
-constexpr uint8_t HXL = (0x03);
-constexpr uint8_t HXH = (0x04);
-constexpr uint8_t HYL = (0x05);
-constexpr uint8_t HYH = (0x06);
-constexpr uint8_t HZL = (0x07);
-constexpr uint8_t HZH = (0x08);
-//------------------------------------------------------------------------------
-constexpr uint8_t STATUS2              = (0x09);
-constexpr uint8_t STATUS2_OVERFLOW_BIT = (3);
-//------------------------------------------------------------------------------
-constexpr uint8_t CONTROL1             = (0x0A);
-constexpr uint8_t CONTROL1_MODE_BIT    = (3);
-constexpr uint8_t CONTROL1_MODE_LENGTH = (4);
-//------------------------------------------------------------------------------
-constexpr uint8_t ASTC               = (0x0C);
-constexpr uint8_t ASTC_SELF_TEST_BIT = (6);
-//------------------------------------------------------------------------------
-constexpr uint8_t TEST1 = (0x0D);
-constexpr uint8_t TEST2 = (0x0E);
-//------------------------------------------------------------------------------
-constexpr uint8_t I2CDIS               = (0x0F);
-constexpr uint8_t I2CDIS_DISABLE_VALUE = (0x1B);
-//------------------------------------------------------------------------------
-constexpr uint8_t ASAX = (0x10);
-constexpr uint8_t ASAY = (0x11);
-constexpr uint8_t ASAZ = (0x12);
-
-/*******************************************************************************
- * MPU9250 Magnetometer (AK8963)
- ******************************************************************************/
-constexpr uint8_t STATUS1_DATA_OVERRUN_BIT = (1);
-constexpr uint8_t STATUS2_BIT_OUTPUT_M_BIT = (4);
-constexpr uint8_t CONTROL1_BIT_OUTPUT_BIT  = (4);
-//------------------------------------------------------------------------------
-constexpr uint8_t CONTROL2                = (0x0B);
-constexpr uint8_t CONTROL2_SOFT_RESET_BIT = (0);
-//------------------------------------------------------------------------------
-
-}  // namespace mag
-
 }  // namespace regs
 
-}  // namespace mpud
+}  // namespace icm20601
 
-#endif /* end of include guard: _MPU_REGISTERS_HPP_ */
+#endif /* end of include guard: _ICM_REGISTERS_HPP_ */

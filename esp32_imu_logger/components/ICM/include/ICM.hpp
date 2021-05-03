@@ -1,29 +1,6 @@
-// =========================================================================
-// This library is placed under the MIT License
-// Copyright 2017-2018 Natanael Josue Rabello. All rights reserved.
-// For the license information refer to LICENSE file in root directory.
-// =========================================================================
 
-/**
- * @file MPU.hpp
- * MPU library main file. Declare MPU class.
- *
- * @attention
- *  MPU library requires SPIbus library.
- *  Select the communication protocol in `menuconfig`
- *  and include the corresponding library to project components.
- *
- * @note
- *  The following is taken in the code:
- *  - MPU9250 is the same as MPU6500 + AK8963
- *  - MPU9150 is the same as MPU6050 + AK8975
- *  - MPU6000 code equals MPU6050
- *  - MPU6555 code equals MPU6500
- *  - MPU9255 code equals MPU9250
- * */
-
-#ifndef _MPU_HPP_
-#define _MPU_HPP_
+#ifndef _ICM_HPP_
+#define _ICM_HPP_
 
 #include <stdint.h>
 #include "esp_err.h"
@@ -31,38 +8,36 @@
 
 #include "SPIbus.hpp" 
 
-#include "mpu/types.hpp"
+#include "icm/types.hpp"
 
-/*! MPU Driver namespace */
-namespace mpud
+/*! ICM Driver namespace */
+namespace icm20601
 {
-class MPU;
+class ICM;
 }
 
-/*! Easy alias for MPU class */
-typedef mpud::MPU MPU_t;
+/*! Easy alias for ICM class */
+typedef icm20601::ICM ICM_t;
 
-namespace mpud
+namespace icm20601
 {
 /*! Motion Processing Unit */
-class MPU
+class ICM
 {
  public:
     //! \name Constructors / Destructor
     //! \{
-    MPU();
-    explicit MPU(mpu_bus_t& bus);
-    MPU(mpu_bus_t& bus, mpu_addr_handle_t addr);
-    ~MPU();
+    ICM();
+    explicit ICM(icm_bus_t& bus);
+    ICM(icm_bus_t& bus, icm_addr_handle_t addr);
+    ~ICM();
     //! \}
     //! \name Basic
     //! \{
-    MPU& setBus(mpu_bus_t& bus);
-    MPU& setAddr(mpu_addr_handle_t addr);
-    MPU& setAddr_hs(mpu_addr_handle_t addr_hs);
-    mpu_bus_t& getBus();
-    mpu_addr_handle_t getAddr();
-    mpu_addr_handle_t getAddr_hs();
+    ICM& setBus(icm_bus_t& bus);
+    ICM& setAddr(icm_addr_handle_t addr);
+    icm_bus_t& getBus();
+    icm_addr_handle_t getAddr();
     esp_err_t lastError();
     //! \}
     //! \name Setup
@@ -125,7 +100,6 @@ class MPU
     esp_err_t resetFIFO();
     uint16_t getFIFOCount();
     esp_err_t readFIFO(size_t length, uint8_t* data);
-    esp_err_t readFIFO_HS(size_t length, uint8_t* data);
     esp_err_t writeFIFO(size_t length, const uint8_t* data);
     fifo_mode_t getFIFOMode();
     fifo_config_t getFIFOConfig();
@@ -156,22 +130,6 @@ class MPU
     esp_err_t setMotionFeatureEnabled(bool enable);
     bool getMotionFeatureEnabled();
     //! \}
-    //! \name Compass | Magnetometer
-    //! \{
-    esp_err_t compassInit();
-    esp_err_t compassTestConnection();
-    esp_err_t compassSetMode(mag_mode_t mode);
-    esp_err_t compassGetAdjustment(uint8_t* x, uint8_t* y, uint8_t* z);
-    mag_mode_t compassGetMode();
-    uint8_t compassWhoAmI();
-    uint8_t compassGetInfo();
-    esp_err_t compassReadByte(uint8_t regAddr, uint8_t* data);
-    esp_err_t compassWriteByte(uint8_t regAddr, uint8_t data);
-    bool compassSelfTest(raw_axes_t* result = nullptr);
-    esp_err_t compassReset();
-    esp_err_t compassSetSensitivity(mag_sensy_t sensy);
-    mag_sensy_t compassGetSensitivity();
-    //! \}
     //! \name Miscellaneous
     //! \{
     esp_err_t setFsyncConfig(int_lvl_t level);
@@ -188,9 +146,7 @@ class MPU
     esp_err_t readBits(uint8_t regAddr, uint8_t bitStart, uint8_t length, uint8_t* data);
     esp_err_t readByte(uint8_t regAddr, uint8_t* data);
     esp_err_t readBytes(uint8_t regAddr, size_t length, uint8_t* data);
-    esp_err_t readBytesHS(uint8_t regAddr, size_t length, uint8_t* data);
     esp_err_t writeBit(uint8_t regAddr, uint8_t bitNum, uint8_t data);
-    esp_err_t writeBitHS(uint8_t regAddr, uint8_t bitNum, uint8_t data);
     esp_err_t writeBits(uint8_t regAddr, uint8_t bitStart, uint8_t length, uint8_t data);
     esp_err_t writeByte(uint8_t regAddr, uint8_t data);
     esp_err_t writeBytes(uint8_t regAddr, size_t length, const uint8_t* data);
@@ -217,40 +173,39 @@ class MPU
     esp_err_t getBiases(accel_fs_t accelFS, gyro_fs_t gyroFS, raw_axes_t* accelBias, raw_axes_t* gyroBias,
                         bool selftest);
 
-    mpu_bus_t* bus;         /*!< Communication bus pointer, I2C / SPI */
-    mpu_addr_handle_t addr; /*!< I2C address / SPI device handle */
-    mpu_addr_handle_t addr_hs; /*!< I2C address / SPI device handle for high clock frequencies*/
+    icm_bus_t* bus;         /*!< Communication bus pointer, I2C / SPI */
+    icm_addr_handle_t addr; /*!< I2C address / SPI device handle */
     uint8_t buffer[16];     /*!< Commom buffer for temporary data */
     esp_err_t err;          /*!< Holds last error code */
 };
 
-}  // namespace mpud
+}  // namespace icm20601
 
 // ==============
 // Inline methods
 // ==============
-namespace mpud
+namespace icm20601
 {
 /*! Default Constructor. */
-inline MPU::MPU() : MPU(MPU_DEFAULT_BUS){};
+inline ICM::ICM() : ICM(ICM_DEFAULT_BUS){};
 /**
- * @brief Contruct a MPU in the given communication bus.
+ * @brief Contruct a ICM in the given communication bus.
  * @param bus Bus protocol object of type `I2Cbus` or `SPIbus`.
  */
-inline MPU::MPU(mpu_bus_t& bus) : MPU(bus, MPU_DEFAULT_ADDR_HANDLE) {}
+inline ICM::ICM(icm_bus_t& bus) : ICM(bus, ICM_DEFAULT_ADDR_HANDLE) {}
 /**
- * @brief Construct a MPU in the given communication bus and address.
+ * @brief Construct a ICM in the given communication bus and address.
  * @param bus Bus protocol object of type `I2Cbus` or `SPIbus`.
  * @param addr I2C address (`mpu_i2caddr_t`) or SPI device handle (`spi_device_handle_t`).
  */
-inline MPU::MPU(mpu_bus_t& bus, mpu_addr_handle_t addr) : bus{&bus}, addr{addr}, buffer{0}, err{ESP_OK} {}
+inline ICM::ICM(icm_bus_t& bus, icm_addr_handle_t addr) : bus{&bus}, addr{addr}, buffer{0}, err{ESP_OK} {}
 /** Default Destructor, does nothing. */
-inline MPU::~MPU() = default;
+inline ICM::~ICM() = default;
 /**
  * @brief Set communication bus.
  * @param bus Bus protocol object of type `I2Cbus` or `SPIbus`.
  */
-inline MPU& MPU::setBus(mpu_bus_t& bus)
+inline ICM& ICM::setBus(icm_bus_t& bus)
 {
     this->bus = &bus;
     return *this;
@@ -258,7 +213,7 @@ inline MPU& MPU::setBus(mpu_bus_t& bus)
 /**
  * @brief Return communication bus object.
  */
-inline mpu_bus_t& MPU::getBus()
+inline icm_bus_t& ICM::getBus()
 {
     return *bus;
 }
@@ -266,7 +221,7 @@ inline mpu_bus_t& MPU::getBus()
  * @brief Set I2C address or SPI device handle.
  * @param addr I2C address (`mpu_i2caddr_t`) or SPI device handle (`spi_device_handle_t`).
  */
-inline MPU& MPU::setAddr(mpu_addr_handle_t addr)
+inline ICM& ICM::setAddr(icm_addr_handle_t addr)
 {
     this->addr = addr;
     return *this;
@@ -274,82 +229,56 @@ inline MPU& MPU::setAddr(mpu_addr_handle_t addr)
 /**
  * @brief Return I2C address or SPI device handle.
  */
-inline mpu_addr_handle_t MPU::getAddr()
+inline icm_addr_handle_t ICM::getAddr()
 {
     return addr;
 }
-/**
- * @brief Set I2C address or SPI device handle.
- * @param addr_hs I2C address (`mpu_i2caddr_t`) or SPI device handle (`spi_device_handle_t`).
- */
-inline MPU& MPU::setAddr_hs(mpu_addr_handle_t addr_hs)
-{
-    this->addr_hs = addr_hs;
-    return *this;
-}
-/**
- * @brief Return I2C address or SPI device handle.
- */
-inline mpu_addr_handle_t MPU::getAddr_hs()
-{
-    return addr_hs;
-}
 /*! Return last error code. */
-inline esp_err_t MPU::lastError()
+inline esp_err_t ICM::lastError()
 {
     return err;
 }
 /*! Read a single bit from a register*/
-inline esp_err_t MPU::readBit(uint8_t regAddr, uint8_t bitNum, uint8_t* data)
+inline esp_err_t ICM::readBit(uint8_t regAddr, uint8_t bitNum, uint8_t* data)
 {
     return err = bus->readBit(addr, regAddr, bitNum, data);
 }
 /*! Read a range of bits from a register */
-inline esp_err_t MPU::readBits(uint8_t regAddr, uint8_t bitStart, uint8_t length, uint8_t* data)
+inline esp_err_t ICM::readBits(uint8_t regAddr, uint8_t bitStart, uint8_t length, uint8_t* data)
 {
     return err = bus->readBits(addr, regAddr, bitStart, length, data);
 }
 /*! Read a single register */
-inline esp_err_t MPU::readByte(uint8_t regAddr, uint8_t* data)
+inline esp_err_t ICM::readByte(uint8_t regAddr, uint8_t* data)
 {
     return err = bus->readByte(addr, regAddr, data);
 }
 /*! Read data from sequence of registers */
-inline esp_err_t MPU::readBytes(uint8_t regAddr, size_t length, uint8_t* data)
+inline esp_err_t ICM::readBytes(uint8_t regAddr, size_t length, uint8_t* data)
 {
     return err = bus->readBytes(addr, regAddr, length, data);
 }
-/*! Read data from sequence of registers */
-inline esp_err_t MPU::readBytesHS(uint8_t regAddr, size_t length, uint8_t* data)
-{
-    return err = bus->readBytes(addr_hs, regAddr, length, data);
-}
 /*! Write a single bit to a register */
-inline esp_err_t MPU::writeBit(uint8_t regAddr, uint8_t bitNum, uint8_t data)
+inline esp_err_t ICM::writeBit(uint8_t regAddr, uint8_t bitNum, uint8_t data)
 {
     return err = bus->writeBit(addr, regAddr, bitNum, data);
 }
-/*! Write a single bit to a register */
-inline esp_err_t MPU::writeBitHS(uint8_t regAddr, uint8_t bitNum, uint8_t data)
-{
-    return err = bus->writeBit(addr_hs, regAddr, bitNum, data);
-}
 /*! Write a range of bits to a register */
-inline esp_err_t MPU::writeBits(uint8_t regAddr, uint8_t bitStart, uint8_t length, uint8_t data)
+inline esp_err_t ICM::writeBits(uint8_t regAddr, uint8_t bitStart, uint8_t length, uint8_t data)
 {
     return err = bus->writeBits(addr, regAddr, bitStart, length, data);
 }
 /*! Write a value to a register */
-inline esp_err_t MPU::writeByte(uint8_t regAddr, uint8_t data)
+inline esp_err_t ICM::writeByte(uint8_t regAddr, uint8_t data)
 {
     return err = bus->writeByte(addr, regAddr, data);
 }
 /*! Write a sequence to data to a sequence of registers */
-inline esp_err_t MPU::writeBytes(uint8_t regAddr, size_t length, const uint8_t* data)
+inline esp_err_t ICM::writeBytes(uint8_t regAddr, size_t length, const uint8_t* data)
 {
     return err = bus->writeBytes(addr, regAddr, length, data);
 }
 
-}  // namespace mpud
+}  // namespace icm20601
 
-#endif /* end of include guard: _MPU_HPP_ */
+#endif /* end of include guard: _ICM_HPP_ */

@@ -5,20 +5,20 @@
 // =========================================================================
 
 /**
- * @file mpu/math.hpp
- * @brief MPU Math helper file
+ * @file icm/math.hpp
+ * @brief ICM Math helper file
  */
 
-#ifndef _MPU_MATH_HPP_
-#define _MPU_MATH_HPP_
+#ifndef _ICM_MATH_HPP_
+#define _ICM_MATH_HPP_
 
 #include <math.h>
 #include <stdint.h>
-#include "mpu/types.hpp"
+#include "icm/types.hpp"
 #include "sdkconfig.h"
 
-/*! MPU Driver namespace */
-namespace mpud
+/*! ICM 20601 Driver namespace */
+namespace icm20601
 {
 /*! Math namespace */
 inline namespace math
@@ -124,6 +124,6 @@ inline int16_t magAdjust(const int16_t axis, const uint8_t adjValue)
 
 }  // namespace math
 
-}  // namespace mpud
+}  // namespace icm20601
 
-#endif /* end of include guard: _MPU_MATH_HPP_ */
+#endif /* end of include guard: _ICM_MATH_HPP_ */

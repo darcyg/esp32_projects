@@ -5,34 +5,34 @@
 // =========================================================================
 
 /**
- * @file mpu/types.hpp
- * Declare Types and Definitions used within `mpud` namespace.
+ * @file icm/types.hpp
+ * Declare Types and Definitions used within `icm20601` namespace.
  */
 
-#ifndef _MPU_TYPES_HPP_
-#define _MPU_TYPES_HPP_
+#ifndef _ICM_TYPES_HPP_
+#define _ICM_TYPES_HPP_
 
 #include <stdint.h>
-#include "mpu/registers.hpp"
+#include "icm/registers.hpp"
 #include "sdkconfig.h"
 
-/*! MPU Driver namespace */
-namespace mpud
+/*! ICM 20601 Driver namespace */
+namespace icm20601
 {
 /*! Types namespace */
 inline namespace types
 {
-/*! MPU's possible I2C slave addresses */
+/*! ICM's possible I2C slave addresses */
 typedef enum {  //
-    MPU_I2CADDRESS_AD0_LOW  = 0x68,
-    MPU_I2CADDRESS_AD0_HIGH = 0x69
-} mpu_i2caddr_t;
-static constexpr mpu_i2caddr_t MPU_DEFAULT_I2CADDRESS = MPU_I2CADDRESS_AD0_LOW;
+    ICM_I2CADDRESS_AD0_LOW  = 0x68,
+    ICM_I2CADDRESS_AD0_HIGH = 0x69
+} icm_i2caddr_t;
+static constexpr icm_i2caddr_t ICM_DEFAULT_I2CADDRESS = ICM_I2CADDRESS_AD0_LOW;
 
-typedef SPI_t mpu_bus_t;
-typedef spi_device_handle_t mpu_addr_handle_t;
-static constexpr mpu_bus_t& MPU_DEFAULT_BUS                = hspi;
-static constexpr mpu_addr_handle_t MPU_DEFAULT_ADDR_HANDLE = nullptr;
+typedef SPI_t icm_bus_t;
+typedef spi_device_handle_t icm_addr_handle_t;
+static constexpr icm_bus_t& ICM_DEFAULT_BUS                = hspi;
+static constexpr icm_addr_handle_t ICM_DEFAULT_ADDR_HANDLE = nullptr;
 
 static constexpr uint16_t SAMPLE_RATE_MAX                  = 32000;
 
@@ -66,12 +66,12 @@ typedef enum {
 
 /*! Clock Source */
 typedef enum {
-    CLOCK_INTERNAL = 0,  //!< Internal oscillator: 20MHz for MPU6500 and 8MHz for MPU6050
+    CLOCK_INTERNAL = 0,  //!< Internal oscillator: 20MHz 
     CLOCK_PLL      = 3,  //!< Selects automatically best pll source (recommended)
     CLOCK_KEEP_RESET = 7  //!< Stops the clock and keeps timing generator in reset
 } clock_src_t;
 
-/*! Fchoice (Frequency choice maybe ?) [MPU6500 and MPU9250 only] */
+/*! Fchoice (Frequency choice) */
 typedef enum {  //
     FCHOICE_0 = 0,
     FCHOICE_1 = 1,
@@ -377,45 +377,6 @@ typedef struct
     raw_axes_t mag;  //!< magnetometer
 } sensors_t;
 
-// ============
-// MAGNETOMETER
-// ============
-static constexpr uint8_t COMPASS_I2CADDRESS      = 0xC;
-static constexpr uint8_t COMPASS_SAMPLE_RATE_MAX = 100;  // 100 Hz
-
-/*! Magnetometer operation modes */
-typedef enum {
-    MAG_MODE_POWER_DOWN     = 0x0,
-    MAG_MODE_SINGLE_MEASURE = 0x1,
-    MAG_MODE_SELF_TEST      = 0x8,
-    MAG_MODE_FUSE_ROM       = 0xF,
-    MAG_MODE_CONTINUOUS_8HZ   = 0x2,  //!< @warning Not yet supported.
-    MAG_MODE_CONTINUOUS_100HZ = 0x6,  //!< @warning Not yet supported.
-    MAG_MODE_EXTERNAL_TRIGGER = 0x4   //!< @warning Not supported.
-} mag_mode_t;
-
-/*! Magnetometer sensor status 1 */
-typedef uint8_t mag_stat1_t;
-static constexpr mag_stat1_t MAG_STAT1_DATA_RDY = {1 << regs::mag::STATUS1_DATA_RDY_BIT};
-static constexpr mag_stat1_t MAG_STAT1_DATA_OVERRUN = {1 << regs::mag::STATUS1_DATA_OVERRUN_BIT};
-
-/*! Magnetometer sensor status 2 */
-typedef uint8_t mag_stat2_t;
-static constexpr mag_stat2_t MAG_STAT2_SENSOR_OVERFLOW = {1 << regs::mag::STATUS2_OVERFLOW_BIT};
-static constexpr mag_stat2_t MAG_STAT2_BIT_OUTPUT_SETTING = {1 << regs::mag::STATUS2_BIT_OUTPUT_M_BIT};
-
-/*! Magnetometer sensitivity */
-typedef enum {
-    MAG_SENSITIVITY_0_6_uT  = 0,  //!< 0.6  uT/LSB  =  14-bit output
-    MAG_SENSITIVITY_0_15_uT = 1,  //!< 0.15 uT/LSB  =  16-bit output
-} mag_sensy_t;
-
-// Auxiliary I2C slaves that operate the Magnetometer (do not change)
-static constexpr auxi2c_slv_t MAG_SLAVE_READ_DATA = AUXI2C_SLAVE_0;  // read measurement data
-static constexpr auxi2c_slv_t MAG_SLAVE_CHG_MODE  = AUXI2C_SLAVE_1;  // change mode to single measure
-
-static constexpr uint8_t MAG_DATA_LENGTH = 8;  // bytes
-
 
 /*! Self-Test results */
 typedef uint8_t selftest_t;
@@ -425,6 +386,6 @@ static constexpr selftest_t SELF_TEST_ACCEL_FAIL{1 << 1};  // 0x2
 
 }  // namespace types
 
-}  // namespace mpud
+}  // namespace icm20601
 
-#endif /* end of include guard: _MPU_TYPES_HPP_ */
+#endif /* end of include guard: _ICM_TYPES_HPP_ */
