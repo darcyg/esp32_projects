@@ -49,10 +49,10 @@ esp_err_t ICM::initialize()
 
     // MPU6500 / MPU9250 share 4kB of memory between the DMP and the FIFO. Since the
     // first 3kB are needed by the DMP, we'll use the last 1kB for the FIFO.
-    if (ICM_ERR_CHECK(writeBits(regs::ACCEL_CONFIG2, regs::ACONFIG2_FIFO_SIZE_BIT, regs::ACONFIG2_FIFO_SIZE_LENGTH,
-                                FIFO_SIZE_1K))) {
-        return err;
-    }
+    // if (ICM_ERR_CHECK(writeBits(regs::ACCEL_CONFIG2, regs::ACONFIG2_FIFO_SIZE_BIT, regs::ACONFIG2_FIFO_SIZE_LENGTH,
+    //                            FIFO_SIZE_1K))) {
+    //    return err;
+    // }
     // set Full Scale range
     if (ICM_ERR_CHECK(setGyroFullScale(GYRO_FS_500DPS))) return err;
     if (ICM_ERR_CHECK(setAccelFullScale(ACCEL_FS_4G))) return err;
@@ -651,8 +651,8 @@ raw_axes_t ICM::getAccelOffset()
  * */
 esp_err_t ICM::computeOffsets(raw_axes_t* accel, raw_axes_t* gyro)
 {
-    constexpr accel_fs_t kAccelFS = ACCEL_FS_2G;     // most sensitive
-    constexpr gyro_fs_t kGyroFS   = GYRO_FS_250DPS;  // most sensitive
+    constexpr accel_fs_t kAccelFS = ACCEL_FS_4G;     // most sensitive
+    constexpr gyro_fs_t kGyroFS   = GYRO_FS_500DPS;  // most sensitive
     if (ICM_ERR_CHECK(getBiases(kAccelFS, kGyroFS, accel, gyro, false))) return err;
     // convert offsets to 16G and 1000DPS format and invert values
     for (int i = 0; i < 3; i++) {
@@ -969,8 +969,8 @@ esp_err_t ICM::registerDump(uint8_t start, uint8_t end)
  * */
 esp_err_t ICM::selfTest(selftest_t* result)
 {
-    constexpr accel_fs_t kAccelFS = ACCEL_FS_2G;
-    constexpr gyro_fs_t kGyroFS   = GYRO_FS_250DPS;
+    constexpr accel_fs_t kAccelFS = ACCEL_FS_4G;
+    constexpr gyro_fs_t kGyroFS   = GYRO_FS_500DPS;
     raw_axes_t gyroRegBias, accelRegBias;
     raw_axes_t gyroSTBias, accelSTBias;
     // get regular biases
@@ -1032,7 +1032,7 @@ static constexpr uint16_t kSelfTestTable[256] = {
  * */
 esp_err_t ICM::accelSelfTest(raw_axes_t& regularBias, raw_axes_t& selfTestBias, uint8_t* result)
 {
-    constexpr accel_fs_t kAccelFS = ACCEL_FS_2G;
+    constexpr accel_fs_t kAccelFS = ACCEL_FS_4G;
     // Criteria A: must be within 50% variation
     constexpr float kMaxVariation = .5f;
     // Criteria B: must be between 255 mg and 675 mg
@@ -1058,7 +1058,7 @@ esp_err_t ICM::accelSelfTest(raw_axes_t& regularBias, raw_axes_t& selfTestBias, 
     for (int i = 0; i < 3; i++) {
         if (shiftCode[i] != 0) {
             shiftProduction[i] = kSelfTestTable[shiftCode[i] - 1];
-            shiftProduction[i] /= math::accelSensitivity(ACCEL_FS_2G);
+            shiftProduction[i] /= math::accelSensitivity(ACCEL_FS_4G);
         }
     }
     ICM_LOGVMSG(msgs::EMPTY, "shiftProduction: %+.2f %+.2f %+.2f", shiftProduction[0], shiftProduction[1],
@@ -1098,7 +1098,7 @@ esp_err_t ICM::accelSelfTest(raw_axes_t& regularBias, raw_axes_t& selfTestBias, 
  * */
 esp_err_t ICM::gyroSelfTest(raw_axes_t& regularBias, raw_axes_t& selfTestBias, uint8_t* result)
 {
-    constexpr gyro_fs_t kGyroFS = GYRO_FS_250DPS;
+    constexpr gyro_fs_t kGyroFS = GYRO_FS_500DPS;
 
     // Criteria A: must be within 50% variation
     constexpr float kMaxVariation = .5f;

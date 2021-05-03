@@ -54,7 +54,7 @@ static void prvICMTask(void*)
     // Calibrate
     icm20601::raw_axes_t accelBias, gyroBias;
     ESP_ERROR_CHECK(ICM.computeOffsets(&accelBias, &gyroBias));
-    // ESP_ERROR_CHECK(ICM.setAccelOffset(accelBias));
+    ESP_ERROR_CHECK(ICM.setAccelOffset(accelBias));
     ESP_ERROR_CHECK(ICM.setGyroOffset(gyroBias));
 
     // Configure
@@ -117,7 +117,7 @@ static void prvICMTask(void*)
             ICM.resetFIFO();
             continue;
         }
-        // ESP_LOGI(TAG, "FIFO count: %d", fifocount);  max. 512
+        // ESP_LOGI(TAG, "FIFO count: %d", fifocount); 
         if ((fifocount % kFIFOPacketSize)) {
             ESP_LOGE(TAG, "FIFO Count misaligned! Expected: %d, Actual: %d", (kFIFOPacketSize*n_interrupts_wait), fifocount);
             // TODO: Check why this happens and error-handle!!! 
@@ -125,6 +125,7 @@ static void prvICMTask(void*)
         // Push data into data_frame 
         // Burst read data from FIFO
         struct DataFrame data_frame; 
+
         if (esp_err_t err = ICM.readFIFO(fifocount, data_frame.SensorReads)) {
             ESP_LOGE(TAG, "Error reading sensor data, %#X", err);
             ICM.resetFIFO();
@@ -141,12 +142,13 @@ static void prvICMTask(void*)
             xQueueReceive(icm_ticks_queue, &data_frame.Timestamps[i_tick], 1000/portTICK_PERIOD_MS);
             i_tick ++;
         }
-        
+
         ICM.resetFIFO();
         // Send data to queue only if measurement is started
         udp_cmd_bits = xEventGroupGetBits(command_event_group); 
 
-        if(udp_cmd_bits&StartMeasurement_BIT){
+        // if(udp_cmd_bits&StartMeasurement_BIT){
+        if(true){
             if(xQueueSendToBack(data_queue, (void*) &data_frame, 1000/portTICK_RATE_MS)!=pdTRUE){
                 ESP_LOGE(TAG, "Writing to queue faled.");
             }
@@ -280,6 +282,38 @@ static void prvWriteFileSD(void*)
         
     }
 }
+
+
+static void prvLowPrioPrint(void*){
+    while(true){
+        struct DataFrame data_frame;
+        if(xQueueReceive(data_queue, &data_frame, 10000/portTICK_PERIOD_MS)!=pdTRUE){
+            ESP_LOGE(TAG, "Reading from queue faled. \n");
+        }
+        else{
+            icm20601::raw_axes_t accelRaw;  // accel raw axes 
+            icm20601::raw_axes_t gyroRaw;  // gyro raw axes 
+            icm20601::float_axes_t accelG;   // accel axes in (g) gravity format
+            icm20601::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
+            for(uint8_t i=0; i < data_frame.n_samples; i++){
+                accelRaw.x = data_frame.SensorReads[0+i*12] << 8 | data_frame.SensorReads[1+i*12];
+                accelRaw.y = data_frame.SensorReads[2+i*12] << 8 | data_frame.SensorReads[3+i*12];
+                accelRaw.z = data_frame.SensorReads[4+i*12] << 8 | data_frame.SensorReads[5+i*12];
+                gyroRaw.x  = data_frame.SensorReads[6+i*12] << 8 | data_frame.SensorReads[7+i*12];
+                gyroRaw.y  = data_frame.SensorReads[8+i*12] << 8 | data_frame.SensorReads[9+i*12];
+                gyroRaw.z  = data_frame.SensorReads[10+i*12] << 8 | data_frame.SensorReads[11+i*12];
+                
+                accelG = icm20601::accelGravity(accelRaw, kAccelFS);
+                gyroDPS = icm20601::gyroDegPerSec(gyroRaw, kGyroFS);
+
+                ESP_LOGI(TAG, "%d \t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", i, accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
+            }
+        }
+
+    }
+    
+}
+
 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
 {
@@ -777,7 +811,7 @@ static void mcast_example_task(void *pvParameters)
                 }
                 ((struct sockaddr_in *)res->ai_addr)->sin_port = htons(UDP_PORT);
                 inet_ntoa_r(((struct sockaddr_in *)res->ai_addr)->sin_addr, addrbuf, sizeof(addrbuf)-1);
-                ESP_LOGI(TAG, "Sending to IPV4 multicast address %s:%d... \t %s",  addrbuf, UDP_PORT, sendbuf);
+                // ESP_LOGI(TAG, "Sending to IPV4 multicast address %s:%d... \t %s",  addrbuf, UDP_PORT, sendbuf);
                 err = sendto(sock, sendbuf, len, 0, res->ai_addr, res->ai_addrlen);
                 freeaddrinfo(res);
                 if (err < 0) {
@@ -892,7 +926,7 @@ static void prvSimpleOtaExample(void*)
     };
 
     while (1){
-        ESP_LOGI(TAG, "Waiting...");
+        // ESP_LOGI(TAG, "Waiting...");
         if(xEventGroupGetBits(command_event_group)&ucOTAUptateStart){
             ESP_LOGI(TAG, "Updating...");
             // vTaskSuspendAll();
@@ -927,6 +961,7 @@ extern "C" void app_main()
 
     // Set up file system 
     prvMountSDCard();
+    // xTaskCreate(prvWriteFileSD, "WriteFile", 2 * 2048, NULL, 0, &xHandleWriteFileSD);
 
     // provision WiFi and connect 
     provision_wifi(); // approx. 633712 Bytes 
@@ -943,4 +978,6 @@ extern "C" void app_main()
 
     // Create a task to setup ICM and read sensor data
     xTaskCreate(prvICMTask, "icmTask", 4 * 2048, NULL, 6, &icm_task_handle);   
+
+    xTaskCreate(prvLowPrioPrint, "printData", 4 * 2048, NULL, 0, &xHandleLowPrioTask);
 }

@@ -77,7 +77,7 @@ void icm_spi_post_transfer_callback(spi_transaction_t *t)
 /* ICM configuration */
 
 static constexpr int kInterruptPin         = 17;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 100;  // Hz
+static constexpr uint16_t kSampleRate      = 50;  // Hz
 static constexpr icm20601::accel_fs_t kAccelFS = icm20601::ACCEL_FS_4G;
 static constexpr icm20601::gyro_fs_t kGyroFS   = icm20601::GYRO_FS_500DPS;
 static constexpr icm20601::dlpf_t kDLPF        = icm20601::DLPF_98HZ;
@@ -208,6 +208,7 @@ TaskHandle_t udp_cmd_task_handle = NULL;
 TaskHandle_t xHandleWriteFileSD = NULL; 
 TaskHandle_t xHandleTransmitFileTCP = NULL; 
 TaskHandle_t xHandleMountSDCard = NULL; 
+TaskHandle_t xHandleLowPrioTask = NULL; 
 
 static void prvTransmitFileTCP(void*);
 
@@ -216,6 +217,8 @@ static void prvWriteFileSD(void*);
 static void prvSimpleOtaExample(void*);
 
 static void prvICMTask(void*);
+
+static void prvLowPrioPrint(void*);
 
 
 static void icmISR(void*);

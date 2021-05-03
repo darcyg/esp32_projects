@@ -26,12 +26,12 @@ inline namespace math
 //
 inline uint8_t accelFSRvalue(const accel_fs_t fs)
 {
-    return 2 << fs;
+    return 4 << fs;
 }
 
 inline uint16_t gyroFSRvalue(const gyro_fs_t fs)
 {
-    return 250 << fs;
+    return 500 << fs;
 }
 
 inline uint16_t accelSensitivity(const accel_fs_t fs)

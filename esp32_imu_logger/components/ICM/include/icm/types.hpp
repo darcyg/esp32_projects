@@ -38,18 +38,18 @@ static constexpr uint16_t SAMPLE_RATE_MAX                  = 32000;
 
 /*! Gyroscope full-scale range */
 typedef enum {
-    GYRO_FS_250DPS  = 0,  //!< +/- 250 º/s  -> 131 LSB/(º/s)
-    GYRO_FS_500DPS  = 1,  //!< +/- 500 º/s  -> 65.5 LSB/(º/s)
-    GYRO_FS_1000DPS = 2,  //!< +/- 1000 º/s -> 32.8 LSB/(º/s)
-    GYRO_FS_2000DPS = 3   //!< +/- 2000 º/s -> 16.4 LSB/(º/s)
+    GYRO_FS_500DPS  = 0,  //!< +/- 500 º/s  -> 65.5 LSB/(º/s)
+    GYRO_FS_1000DPS  = 1,  //!< +/- 1000 º/s -> 32.8 LSB/(º/s)
+    GYRO_FS_2000DPS = 2,  //!< +/- 2000 º/s -> 16.4 LSB/(º/s)
+    GYRO_FS_4000DPS = 3   //!< +/- 4000 º/s -> 8.2 LSB/(º/s)
 } gyro_fs_t;
 
 /*! Accel full-scale range */
 typedef enum {
-    ACCEL_FS_2G  = 0,  //!< +/- 2 g  -> 16.384 LSB/g
-    ACCEL_FS_4G  = 1,  //!< +/- 4 g  -> 8.192 LSB/g
-    ACCEL_FS_8G  = 2,  //!< +/- 8 g  -> 4.096 LSB/g
-    ACCEL_FS_16G = 3   //!< +/- 16 g -> 2.048 LSB/g
+    ACCEL_FS_4G  = 0,  //!< +/- 4 g  -> 8.192 LSB/g
+    ACCEL_FS_8G  = 1,  //!< +/- 8 g  -> 4.096 LSB/g
+    ACCEL_FS_16G  = 2,  //!< +/- 16 g -> 2.048 LSB/g
+    ACCEL_FS_32G = 3   //!< +/- 32 g -> 1.024 LSB/g
 } accel_fs_t;
 
 /*! Digital low-pass filter (based on gyro bandwidth) */
