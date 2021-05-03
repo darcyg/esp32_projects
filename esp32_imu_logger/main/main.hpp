@@ -18,6 +18,7 @@ using namespace std;
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
 
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "wifi_provisioning/manager.h"
 #include "wifi_provisioning/scheme_ble.h"
@@ -30,6 +31,11 @@ using namespace std;
 #include "driver/spi_master.h"
 #include "esp_err.h"
 #include "esp_log.h"
+
+#include "esp_ota_ops.h"
+#include "esp_http_client.h"
+#include "esp_https_ota.h"
+
 #include "esp_vfs_fat.h"
 
 #include "freertos/FreeRTOS.h"
@@ -123,6 +129,7 @@ struct DataSample6Axis
 // WIFI STUFF 
 /* Signal Wi-Fi events on this event-group */
 
+//#define HOST_IP_ADDR "192.168.178.28"
 #define HOST_IP_ADDR "192.168.178.68"
 #define PORT 3333
 #define COMMAND_PORT 3334
@@ -135,26 +142,60 @@ struct DataSample6Axis
 
 static const char *V4TAG = "mcast-ipv4";
 
-const int WIFI_CONNECTED_EVENT = BIT0;
-static EventGroupHandle_t wifi_event_group;
-static EventGroupHandle_t command_event_group; 
-static EventGroupHandle_t status_event_group; 
 
+static EventGroupHandle_t wifi_event_group;
+const int WIFI_CONNECTED_EVENT = BIT0;
+
+#define DISABLE_BT_PROV 1
+
+extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
+extern const uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
+
+esp_err_t _http_event_handler(esp_http_client_event_t *evt)
+{
+    switch (evt->event_id) {
+    case HTTP_EVENT_ERROR:
+        ESP_LOGD(TAG, "HTTP_EVENT_ERROR");
+        break;
+    case HTTP_EVENT_ON_CONNECTED:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_CONNECTED");
+        break;
+    case HTTP_EVENT_HEADER_SENT:
+        ESP_LOGD(TAG, "HTTP_EVENT_HEADER_SENT");
+        break;
+    case HTTP_EVENT_ON_HEADER:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+        break;
+    case HTTP_EVENT_ON_DATA:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
+        break;
+    case HTTP_EVENT_ON_FINISH:
+        ESP_LOGD(TAG, "HTTP_EVENT_ON_FINISH");
+        break;
+    case HTTP_EVENT_DISCONNECTED:
+        ESP_LOGD(TAG, "HTTP_EVENT_DISCONNECTED");
+        break;
+    }
+    return ESP_OK;
+}
+
+static EventGroupHandle_t status_event_group; 
 // status_event_group bits: 
 const uint8_t ucMPUReady_BIT          = BIT0;
 const uint8_t ucMPUWriting_BIT        = BIT1;
 const uint8_t ucFSReady_BIT           = BIT2;
 const uint8_t ucRxCommandsReady_BIT   = BIT3;
 const uint8_t ucFileSaved_BIT         = BIT4;
-const uint8_t ucNOTUSED_BIT0          = BIT5;
-const uint8_t ucNOTUSED_BIT1          = BIT6;
-const uint8_t ucNOTUSED_BIT2          = BIT7;
+
 // ... continue as needed 
 
+static EventGroupHandle_t command_event_group; 
 // command_event_group bits: 
-const uint8_t MPUReadyForMeasurement_BIT = BIT0;
-const uint8_t StartMeasurement_BIT = BIT1;
-const uint8_t IsMeasuring_BIT = BIT2;
+const uint8_t MPUReadyForMeasurement_BIT    = BIT0;
+const uint8_t StartMeasurement_BIT          = BIT1;
+const uint8_t IsMeasuring_BIT               = BIT2;
+const uint8_t ucOTAUptateStart              = BIT3;
+
 
 static MPU_t MPU; 
 
@@ -174,6 +215,8 @@ TaskHandle_t xHandleMountSDCard = NULL;
 static void prvTransmitFileTCP(void*);
 
 static void prvWriteFileSD(void*);
+
+static void prvSimpleOtaExample(void*);
 
 
 static void mpuISR(void*);

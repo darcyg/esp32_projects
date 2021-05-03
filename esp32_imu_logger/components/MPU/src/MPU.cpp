@@ -137,7 +137,8 @@ esp_err_t MPU::testConnection()
 {
     const uint8_t wai = whoAmI();
     if (MPU_ERR_CHECK(lastError())) return err;
-    return (wai == 0x71) ? ESP_OK : ESP_ERR_NOT_FOUND;
+    // return (wai == 0x71) ? ESP_OK : ESP_ERR_NOT_FOUND;
+    return (wai == 0xAC) ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
 /**
