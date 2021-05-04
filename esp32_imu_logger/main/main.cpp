@@ -40,22 +40,14 @@ static void prvICMTask(void*)
 
     // Initialize
     ESP_ERROR_CHECK(ICM.initialize());
-
-    // Self-Test
-    icm20601::selftest_t retSelfTest;
-    while (esp_err_t err = ICM.selfTest(&retSelfTest)) {
-        ESP_LOGE(TAG, "Failed to perform ICM Self-Test, error=%#X", err);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-    ESP_LOGI(TAG, "ICM Self-Test result: Gyro=%s Accel=%s",  //
-             (retSelfTest & icm20601::SELF_TEST_GYRO_FAIL ? "FAIL" : "OK"),
-             (retSelfTest & icm20601::SELF_TEST_ACCEL_FAIL ? "FAIL" : "OK"));
+    
+    // TODO: Consider SelfTest
 
     // Calibrate
-    icm20601::raw_axes_t accelBias, gyroBias;
-    ESP_ERROR_CHECK(ICM.computeOffsets(&accelBias, &gyroBias));
-    ESP_ERROR_CHECK(ICM.setAccelOffset(accelBias));
-    ESP_ERROR_CHECK(ICM.setGyroOffset(gyroBias));
+    // icm20601::raw_axes_t accelBias, gyroBias;
+    // ESP_ERROR_CHECK(ICM.computeOffsets(&accelBias, &gyroBias)); 
+    // ESP_ERROR_CHECK(ICM.setAccelOffset(accelBias)); 
+    // ESP_ERROR_CHECK(ICM.setGyroOffset(gyroBias));
 
     // Configure
     ESP_ERROR_CHECK(ICM.setAccelFullScale(kAccelFS));

@@ -36,12 +36,12 @@ inline uint16_t gyroFSRvalue(const gyro_fs_t fs)
 
 inline uint16_t accelSensitivity(const accel_fs_t fs)
 {
-    return 16384 >> fs;
+    return 8192 >> fs;
 }
 
 inline float gyroSensitivity(const gyro_fs_t fs)
 {
-    return 131.f / (1 << fs);
+    return 65.5 / (1 << fs);
 }
 
 inline float accelResolution(const accel_fs_t fs)

@@ -57,7 +57,7 @@ static constexpr int MOSI             = 23;
 static constexpr int MISO             = 19;
 static constexpr int SCLK             = 18;
 static constexpr int CS               = 5;
-static constexpr uint32_t SPI_CLOCK_SPEED = 7*1000*1000;  // 10MHz
+static constexpr uint32_t SPI_CLOCK_SPEED = 8*1000*1000;  // 8MHz
 
 static constexpr int LOG_PIN          = 33;
 static constexpr int SYNC_PIN         = 17;
