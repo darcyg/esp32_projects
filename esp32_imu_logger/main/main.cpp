@@ -139,8 +139,8 @@ static void prvICMTask(void*)
         // Send data to queue only if measurement is started
         udp_cmd_bits = xEventGroupGetBits(command_event_group); 
 
-        // if(udp_cmd_bits&StartMeasurement_BIT){
-        if(true){
+        if(udp_cmd_bits&StartMeasurement_BIT){
+        // if(true){
             if(xQueueSendToBack(data_queue, (void*) &data_frame, 1000/portTICK_RATE_MS)!=pdTRUE){
                 ESP_LOGE(TAG, "Writing to queue faled.");
             }
@@ -155,7 +155,6 @@ static void prvICMTask(void*)
     }
     vTaskDelete(nullptr);
 }
-
 
 static void prvMountSDCard(void)
 {
@@ -194,7 +193,6 @@ static void prvMountSDCard(void)
     // does make a difference some boards, so we do that here.
     gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_CMD, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_CMD, needed in 4- and 1- line modes
     gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D0, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D0, needed in 4- and 1-line modes
-    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D1, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D1, needed in 4-line mode only ****
 
     ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
@@ -275,7 +273,6 @@ static void prvWriteFileSD(void*)
     }
 }
 
-
 static void prvLowPrioPrint(void*){
     while(true){
         struct DataFrame data_frame;
@@ -303,6 +300,21 @@ static void prvLowPrioPrint(void*){
         }
 
     }
+    
+}
+
+static void prvStatusLED(void*){
+    //GPIO_NUM_16 is G16 on board
+    gpio_set_direction((gpio_num_t)PIN_STATUS_LED,GPIO_MODE_OUTPUT);
+    int cnt=0;
+    while(1) {
+		gpio_set_level(GPIO_NUM_16,cnt%2);
+        cnt++;
+        vTaskDelay(1000/portTICK_PERIOD_MS);
+    }
+}
+
+static void prvBattStatus(void*){
     
 }
 
@@ -943,6 +955,10 @@ extern "C" void app_main()
 {   
 
     ESP_LOGI(TAG, "IMU Logger starting...");
+
+    // Create status LED task
+    xTaskCreate(prvStatusLED, "LEDTask", 2048, NULL, 0, &xHandleStatusLED);   
+
     // first of all create event groups for inter-task communication 
     status_event_group = xEventGroupCreate(); 
     command_event_group = xEventGroupCreate(); 
@@ -971,5 +987,7 @@ extern "C" void app_main()
     // Create a task to setup ICM and read sensor data
     xTaskCreate(prvICMTask, "icmTask", 4 * 2048, NULL, 6, &icm_task_handle);   
 
-    xTaskCreate(prvLowPrioPrint, "printData", 4 * 2048, NULL, 0, &xHandleLowPrioTask);
+    // xTaskCreate(prvLowPrioPrint, "printData", 4 * 2048, NULL, 0, &xHandleLowPrioTask);
+
+    
 }

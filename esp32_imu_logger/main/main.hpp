@@ -101,10 +101,15 @@ static const char* TAG = "IMU Logger";
 
 static constexpr int PIN_NUM_SD_CMD            = 15;
 static constexpr int PIN_NUM_SD_D0             = 2;
-static constexpr int PIN_NUM_SD_D1             = 4;
 
 #define MOUNT_POINT "/sdcard"
 static const char *pcTmpFileDefault = "tmp_000.imu";
+
+
+/* More peripherals */ 
+static constexpr int PIN_BATT_STATUS            = 12;
+static constexpr int PIN_STATUS_LED             = 32;
+
 
 xQueueHandle data_queue; 
 xQueueHandle timestamp_queue; 
@@ -126,7 +131,6 @@ struct DataSample6Axis
 // WIFI STUFF 
 /* Signal Wi-Fi events on this event-group */
 
-//#define HOST_IP_ADDR "192.168.178.28"
 #define HOST_IP_ADDR "192.168.178.68"
 #define PORT 3333
 #define COMMAND_PORT 3334
@@ -143,7 +147,7 @@ static const char *V4TAG = "mcast-ipv4";
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_EVENT = BIT0;
 
-#define DISABLE_BT_PROV 1
+// #define DISABLE_BT_PROV 1
 
 extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
 extern const uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
@@ -205,10 +209,14 @@ static void prvMountSDCard(void);
 
 TaskHandle_t icm_task_handle = NULL; 
 TaskHandle_t udp_cmd_task_handle = NULL; 
+
+TaskHandle_t xHandleStatusLED = NULL; 
+
 TaskHandle_t xHandleWriteFileSD = NULL; 
 TaskHandle_t xHandleTransmitFileTCP = NULL; 
 TaskHandle_t xHandleMountSDCard = NULL; 
 TaskHandle_t xHandleLowPrioTask = NULL; 
+
 
 static void prvTransmitFileTCP(void*);
 
@@ -219,6 +227,10 @@ static void prvSimpleOtaExample(void*);
 static void prvICMTask(void*);
 
 static void prvLowPrioPrint(void*);
+
+static void prvStatusLED(void*);
+
+static void prvBattStatus(void*);
 
 
 static void icmISR(void*);
