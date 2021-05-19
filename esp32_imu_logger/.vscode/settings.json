@@ -29,6 +29,9 @@
         "random": "cpp",
         "type_traits": "cpp",
         "sstream": "cpp",
-        "fstream": "cpp"
+        "fstream": "cpp",
+        "memory": "cpp",
+        "future": "cpp",
+        "optional": "cpp"
     }
 }

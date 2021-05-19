@@ -46,9 +46,10 @@ using namespace std;
 
 #include "sdkconfig.h"
 
-#include "MPU.hpp"
-#include "mpu/math.hpp"
-#include "mpu/types.hpp"
+#include "ICM.hpp"
+#include "icm/math.hpp"
+#include "icm/types.hpp"
+
 
 #include "SPIbus.hpp"
 static SPI_t& spi                     = vspi;  // hspi or vspi
@@ -56,36 +57,35 @@ static constexpr int MOSI             = 23;
 static constexpr int MISO             = 19;
 static constexpr int SCLK             = 18;
 static constexpr int CS               = 5;
-static constexpr uint32_t CLOCK_SPEED_LOW = 1*1000*1000;  // 1MHz
-static constexpr uint32_t CLOCK_SPEED_HIGH = 10*1000*1000;  // 10MHz
+static constexpr uint32_t SPI_CLOCK_SPEED = 8*1000*1000;  // 8MHz
 
 static constexpr int LOG_PIN          = 33;
 static constexpr int SYNC_PIN         = 17;
 
 
-void mpu_spi_pre_transfer_callback(spi_transaction_t *t)
+void icm_spi_pre_transfer_callback(spi_transaction_t *t)
 {
     gpio_set_level((gpio_num_t)CS, 0);
 }
 
-void mpu_spi_post_transfer_callback(spi_transaction_t *t)
+void icm_spi_post_transfer_callback(spi_transaction_t *t)
 {
     gpio_set_level((gpio_num_t)CS, 1);
 }
 
 
-/* MPU configuration */
+/* ICM configuration */
 
-static constexpr int kInterruptPin         = 34;  // GPIO_NUM
-static constexpr uint16_t kSampleRate      = 100;  // Hz
-static constexpr mpud::accel_fs_t kAccelFS = mpud::ACCEL_FS_4G;
-static constexpr mpud::gyro_fs_t kGyroFS   = mpud::GYRO_FS_500DPS;
-static constexpr mpud::dlpf_t kDLPF        = mpud::DLPF_98HZ;
-static constexpr mpud::int_config_t kInterruptConfig{
-    .level = mpud::INT_LVL_ACTIVE_HIGH,
-    .drive = mpud::INT_DRV_PUSHPULL,
-    .mode  = mpud::INT_MODE_PULSE50US,
-    .clear = mpud::INT_CLEAR_STATUS_REG  //
+static constexpr int kInterruptPin         = 17;  // GPIO_NUM
+static constexpr uint16_t kSampleRate      = 50;  // Hz
+static constexpr icm20601::accel_fs_t kAccelFS = icm20601::ACCEL_FS_4G;
+static constexpr icm20601::gyro_fs_t kGyroFS   = icm20601::GYRO_FS_500DPS;
+static constexpr icm20601::dlpf_t kDLPF        = icm20601::DLPF_98HZ;
+static constexpr icm20601::int_config_t kInterruptConfig{
+    .level = icm20601::INT_LVL_ACTIVE_HIGH,
+    .drive = icm20601::INT_DRV_PUSHPULL,
+    .mode  = icm20601::INT_MODE_PULSE50US,
+    .clear = icm20601::INT_CLEAR_STATUS_REG  //
 };
 
 // FIFO
@@ -93,24 +93,27 @@ constexpr uint16_t kFIFOPacketSize = 12;  // in Byte
 constexpr uint16_t kFIFOSize = 512;  // in Byte
 constexpr uint8_t kFIFOReadsMax = (uint8_t)(kFIFOSize/kFIFOPacketSize); 
 
-/*-*/
+/* END ICM configuration */
 
-static const char* TAG = "App";
+static const char* TAG = "IMU Logger";
 
 /* SD card configuation */
 
 static constexpr int PIN_NUM_SD_CMD            = 15;
 static constexpr int PIN_NUM_SD_D0             = 2;
-static constexpr int PIN_NUM_SD_D1             = 4;
-static constexpr int PIN_NUM_SD_D2             = 12;
-static constexpr int PIN_NUM_SD_D3             = 13;
 
 #define MOUNT_POINT "/sdcard"
 static const char *pcTmpFileDefault = "tmp_000.imu";
 
+
+/* More peripherals */ 
+static constexpr int PIN_BATT_STATUS            = 12;
+static constexpr int PIN_STATUS_LED             = 32;
+
+
 xQueueHandle data_queue; 
 xQueueHandle timestamp_queue; 
-xQueueHandle mpu_ticks_queue;
+xQueueHandle icm_ticks_queue;
 
 struct DataFrame 
 {
@@ -124,7 +127,6 @@ struct DataSample6Axis
     uint8_t     SensorReads[kFIFOPacketSize];
     uint64_t    Timestamp;
 };
-
 
 // WIFI STUFF 
 /* Signal Wi-Fi events on this event-group */
@@ -146,8 +148,7 @@ static const char *V4TAG = "mcast-ipv4";
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_EVENT = BIT0;
 
-#define DISABLE_BT_PROV 1
-
+// #define DISABLE_BT_PROV 1
 extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
 extern const uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
 
@@ -181,8 +182,8 @@ esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 
 static EventGroupHandle_t status_event_group; 
 // status_event_group bits: 
-const uint8_t ucMPUReady_BIT          = BIT0;
-const uint8_t ucMPUWriting_BIT        = BIT1;
+const uint8_t ucICMReady_BIT          = BIT0;
+const uint8_t ucICMWriting_BIT        = BIT1;
 const uint8_t ucFSReady_BIT           = BIT2;
 const uint8_t ucRxCommandsReady_BIT   = BIT3;
 const uint8_t ucFileSaved_BIT         = BIT4;
@@ -191,13 +192,13 @@ const uint8_t ucFileSaved_BIT         = BIT4;
 
 static EventGroupHandle_t command_event_group; 
 // command_event_group bits: 
-const uint8_t MPUReadyForMeasurement_BIT    = BIT0;
+const uint8_t ICMReadyForMeasurement_BIT    = BIT0;
 const uint8_t StartMeasurement_BIT          = BIT1;
 const uint8_t IsMeasuring_BIT               = BIT2;
 const uint8_t ucOTAUptateStart              = BIT3;
 
 
-static MPU_t MPU; 
+static ICM_t ICM; 
 
 /* Functions */
 
@@ -206,11 +207,16 @@ static void prvMountSDCard(void);
 
 /* Tasks */
 
-TaskHandle_t mpu_task_handle = NULL; 
+TaskHandle_t icm_task_handle = NULL; 
 TaskHandle_t udp_cmd_task_handle = NULL; 
+
+TaskHandle_t xHandleStatusLED = NULL; 
+
 TaskHandle_t xHandleWriteFileSD = NULL; 
 TaskHandle_t xHandleTransmitFileTCP = NULL; 
 TaskHandle_t xHandleMountSDCard = NULL; 
+TaskHandle_t xHandleLowPrioTask = NULL; 
+
 
 static void prvTransmitFileTCP(void*);
 
@@ -218,10 +224,16 @@ static void prvWriteFileSD(void*);
 
 static void prvSimpleOtaExample(void*);
 
+static void prvICMTask(void*);
 
-static void mpuISR(void*);
+static void prvLowPrioPrint(void*);
 
-static void mpuTask(void*);
+static void prvStatusLED(void*);
+
+static void prvBattStatus(void*);
+
+
+static void icmISR(void*);
 
 static void udp_rx_commands_task(void*);
 
