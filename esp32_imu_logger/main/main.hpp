@@ -131,6 +131,7 @@ struct DataSample6Axis
 // WIFI STUFF 
 /* Signal Wi-Fi events on this event-group */
 
+//#define HOST_IP_ADDR "192.168.178.28"
 #define HOST_IP_ADDR "192.168.178.68"
 #define PORT 3333
 #define COMMAND_PORT 3334
@@ -148,7 +149,6 @@ static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_EVENT = BIT0;
 
 // #define DISABLE_BT_PROV 1
-
 extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
 extern const uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
 
