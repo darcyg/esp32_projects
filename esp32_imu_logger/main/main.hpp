@@ -29,6 +29,7 @@ using namespace std;
 #include "driver/sdmmc_host.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "driver/ledc.h"
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -148,7 +149,6 @@ static const char *V4TAG = "mcast-ipv4";
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_EVENT = BIT0;
 
-// #define DISABLE_BT_PROV 1
 extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
 extern const uint8_t server_cert_pem_end[] asm("_binary_ca_cert_pem_end");
 
