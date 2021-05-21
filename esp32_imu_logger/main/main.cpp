@@ -13,8 +13,7 @@ static IRAM_ATTR void icmISR(TaskHandle_t taskHandle)
     if (HPTaskWoken == pdTRUE) portYIELD_FROM_ISR();
 }
 
-
-static void prvICMTask(void*)
+static void vICMTask(void*)
 {   
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     EventBits_t udp_cmd_bits;
@@ -153,7 +152,7 @@ static void prvICMTask(void*)
     vTaskDelete(nullptr);
 }
 
-static void prvMountSDCard(void)
+esp_err_t vMountSDCard(void)
 {
     //
     // Create filesystem and mount 
@@ -188,8 +187,8 @@ static void prvMountSDCard(void)
     // GPIOs 15, 2, 4, 12, 13 should have external 10k pull-ups.
     // Internal pull-ups are not sufficient. However, enabling internal pull-ups
     // does make a difference some boards, so we do that here.
-    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_CMD, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_CMD, needed in 4- and 1- line modes
-    gpio_set_pull_mode((gpio_num_t)PIN_NUM_SD_D0, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D0, needed in 4- and 1-line modes
+    gpio_set_pull_mode(PIN_NUM_SDMMC_CMD, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_CMD, needed in 4- and 1- line modes
+    gpio_set_pull_mode(PIN_NUM_SDMMC_D0, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D0, needed in 4- and 1-line modes
 
     ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
@@ -201,15 +200,16 @@ static void prvMountSDCard(void)
             ESP_LOGE(TAG, "Failed to initialize the card (%s). "
                 "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret));
         }
-        return;
+        return ESP_FAIL;
     }
 
     // Card has been initialized, print its properties
     ESP_LOGI(TAG, "$ SD card sucessfully initialized.");
     sdmmc_card_print_info(stdout, card);
+    return ESP_OK;
 }
 
-static void prvWriteFileSD(void*)
+static void vWriteFileSDTask(void*)
 {   
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     EventBits_t xStatusBits;
@@ -225,7 +225,7 @@ static void prvWriteFileSD(void*)
     FILE* active_file = fopen(filepath, "wb");
     if (active_file == NULL) {
         ESP_LOGE(TAG, "Failed to open file for writing");
-        return;
+        vTaskDelete(nullptr);
     }
     //
     // File created 
@@ -262,16 +262,16 @@ static void prvWriteFileSD(void*)
                 ESP_LOGI(TAG, "Packets written: %d", n_packets);
                 xEventGroupSetBits(status_event_group, ucFileSaved_BIT);
                 // Create task to transmit file
-                xTaskCreate(prvTransmitFileTCP, "TransmitFile", 2 * 2048, NULL, 0, &xHandleTransmitFileTCP);
-                vTaskDelete(xHandleWriteFileSD);
+                xTaskCreate(vTransmitFileTCPTask, "TransmitFile", 2 * 2048, NULL, 0, &xHandleTransmitFileTCP);
+                vTaskDelete(xHandleWriteFileSDTask);
             }       
         }
         
     }
 }
 
-static void prvLowPrioPrint(void*){
-    while(true){
+static void vSerialPrintDataTask(void*){
+    while(1){
         struct DataFrame data_frame;
         if(xQueueReceive(data_queue, &data_frame, 10000/portTICK_PERIOD_MS)!=pdTRUE){
             ESP_LOGE(TAG, "Reading from queue faled. \n");
@@ -300,9 +300,9 @@ static void prvLowPrioPrint(void*){
     
 }
 
-static void prvStatusLED(void*){
+static void vStatusLEDTask(void*){
 
-    gpio_set_direction((gpio_num_t)PIN_STATUS_LED,GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_NUM_STATUS_LED,GPIO_MODE_OUTPUT);
 
     uint16_t duty_ms = pow(2, 12);
     uint16_t fade_ms = 2000;
@@ -351,10 +351,102 @@ static void prvStatusLED(void*){
     }
 }
 
-static void prvBattStatus(void*){
-    
+
+static void check_efuse(void)
+{
+    //Check if TP is burned into eFuse
+    if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_TP) == ESP_OK) {
+        printf("eFuse Two Point: Supported\n");
+    } else {
+        printf("eFuse Two Point: NOT supported\n");
+    }
+    //Check Vref is burned into eFuse
+    if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_VREF) == ESP_OK) {
+        printf("eFuse Vref: Supported\n");
+    } else {
+        printf("eFuse Vref: NOT supported\n");
+    }
 }
 
+static void print_char_val_type(esp_adc_cal_value_t val_type)
+{
+    if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
+        printf("Characterized using Two Point Value\n");
+    } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
+        printf("Characterized using eFuse Vref\n");
+    } else {
+        printf("Characterized using Default Vref\n");
+    }
+}
+
+static void vBattStatusTask(void*){
+    //Check if Two Point or Vref are burned into eFuse
+    check_efuse();
+
+    //Configure ADC
+    adc1_config_width(width);
+    adc1_config_channel_atten(adc_channel, atten);
+
+    //Characterize ADC
+    adc_chars = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
+    esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adc_chars);
+    print_char_val_type(val_type);
+
+    uint8_t n_samples = 64;
+    uint32_t percentage;
+    uint32_t adc_reading;
+    uint32_t voltage;
+    uint8_t n = 5;
+    uint32_t a[n] = {50};  
+
+    //Continuously sample ADC1
+    while (1) {
+        char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
+
+        adc_reading = 0;
+        //Multisampling
+        for (uint8_t i=0; i<n_samples; i++) {
+            adc_reading += adc1_get_raw((adc1_channel_t)adc_channel);
+        }
+        adc_reading /= n_samples;
+        //Convert adc_reading to voltage in mV to percentage in %
+        voltage = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
+        percentage = bat_voltage_to_percentage(voltage);
+
+        // average over n values
+        for(int8_t i=n-2; i>=0; i--){
+                a[i+1] = a[i]; //move all element to the right except last one
+            }
+        a[0] = percentage; 
+        
+        // round down to multiple of 5 
+        uint16_t temp = 0;
+        for(uint8_t i=0; i<n; i++){
+                temp += a[i];
+            }
+        temp /= n;
+        battery_percentage = temp / 5 * 5; 
+        ESP_LOGW(TAG, "Battery Percentage: %d", battery_percentage);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+    }
+}
+
+static uint32_t bat_voltage_to_percentage(uint32_t voltage){
+    uint32_t bat_100 = (uint32_t)(0.5*4200);  // in mV  (voltage divider)
+    uint32_t bat_5 = (uint32_t)(0.5*3600);  // in mV  (voltage divider)
+    uint32_t percentage;
+    if (voltage < bat_5){
+        return 0;
+    }
+    else if (voltage > bat_100){
+        return 100; 
+    }
+    else{
+        percentage = (voltage-bat_5)*100/(bat_100-bat_5); 
+        return percentage;
+    }
+}
 
 // # # # # # # # # # # 
 // WIFI SETUP
@@ -558,7 +650,7 @@ static void get_device_service_name(char *service_name, size_t max)
 // TCP FILE TRANSMIT 
 // # # # # # # # # # # 
 
-static void prvTransmitFileTCP(void*)
+static void vTransmitFileTCPTask(void*)
 {
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
 
@@ -695,7 +787,7 @@ static void prvTransmitFileTCP(void*)
                 }
                 else{
                     ESP_LOGW(TAG, "File successfully deleted. Deleting task.");
-                    xTaskCreate(prvWriteFileSD, "WriteFile", 2 * 2048, NULL, 0, &xHandleWriteFileSD);
+                    xTaskCreate(vWriteFileSDTask, "WriteFile", 2 * 2048, NULL, 0, &xHandleWriteFileSDTask);
                     file_transmitted = pdTRUE; 
                     break;
                 }
@@ -716,7 +808,7 @@ static void prvTransmitFileTCP(void*)
 // UDP MULTICAST
 // # # # # # # # # # # 
 
-static void mcast_example_task(void *pvParameters)
+static void vMCastRCVTask(void *pvParameters)
 {
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     EventBits_t udp_cmd_bits;
@@ -918,7 +1010,7 @@ static int create_multicast_ipv4_socket(void)
 
     sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0) {
-        ESP_LOGE(V4TAG, "Failed to create socket. Error %d", errno);
+        ESP_LOGE(TAG, "Failed to create socket. Error %d", errno);
         return -1;
     }
 
@@ -928,7 +1020,7 @@ static int create_multicast_ipv4_socket(void)
     saddr.sin_addr.s_addr = htonl(INADDR_ANY);
     err = bind(sock, (struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
     if (err < 0) {
-        ESP_LOGE(V4TAG, "Failed to bind socket. Error %d", errno);
+        ESP_LOGE(TAG, "Failed to bind socket. Error %d", errno);
         close(sock);
         return -1;
     }
@@ -938,7 +1030,7 @@ static int create_multicast_ipv4_socket(void)
     uint8_t ttl = MULTICAST_TTL;
     setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(uint8_t));
     if (err < 0) {
-        ESP_LOGE(V4TAG, "Failed to set IP_MULTICAST_TTL. Error %d", errno);
+        ESP_LOGE(TAG, "Failed to set IP_MULTICAST_TTL. Error %d", errno);
         close(sock);
         return -1;
     }
@@ -955,7 +1047,7 @@ static int create_multicast_ipv4_socket(void)
     return sock;
 }
 
-static void prvSimpleOtaExample(void*)
+static void vOTAUpdateTask(void*)
 {
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     ESP_LOGI(TAG, "Starting OTA task");
@@ -999,29 +1091,32 @@ extern "C" void app_main()
     icm_ticks_queue = xQueueCreate(kFIFOReadsMax, sizeof(int64_t));
 
     // Create status LED task
-    xTaskCreate(prvStatusLED, "LEDTask", 2048, NULL, 1, &xHandleStatusLED); 
+    xTaskCreate(vStatusLEDTask, "StatusLEDTask", 2048, NULL, 1, &xHandleStatusLEDTask); 
+
+    // Create Battery Level 
+    xTaskCreate(vBattStatusTask, "BattStatusTask", 2048, NULL, 1, &xHandleBattStatusTask); 
 
     // provision WiFi and connect 
     provision_wifi(); 
 
     // Set up file system 
-    prvMountSDCard();
-    // xTaskCreate(prvWriteFileSD, "WriteFile", 2 * 2048, NULL, 0, &xHandleWriteFileSD);
-
+    esp_err_t ret = vMountSDCard();
+    if(ret == ESP_OK){
+        xTaskCreate(vWriteFileSDTask, "WriteFileSDTask", 2 * 2048, NULL, 3, &xHandleWriteFileSDTask);
+    }
+        
     // Create OTA update task 
-    // approx. 
-    xTaskCreate(&prvSimpleOtaExample, "ota_update_task", 8192, NULL, 3, NULL);
+    xTaskCreate(vOTAUpdateTask, "OTAUpdateTask", 8192, NULL, 3, &xHandleOTAUpdateTask);
 
     // Initialize bus through either the Library API or esp-idf API
     spi.begin(MOSI, MISO, SCLK);
     
-    // Create UDP Multicast task for syncing 
-    xTaskCreate(&mcast_example_task, "mcast_task", 4096, NULL, 3, NULL);
+    // Create UDP Multicast task for receiving commands and syncing 
+    xTaskCreate(vMCastRCVTask, "MCastRCVTask", 4096, NULL, 3, &xHandleMCastRCVTask);
 
     // Create a task to setup ICM and read sensor data
-    xTaskCreate(prvICMTask, "icmTask", 4 * 2048, NULL, 6, &icm_task_handle);   
+    xTaskCreate(vICMTask, "ICMTask", 4 * 2048, NULL, 6, &xHandleICMTask);   
 
-    // xTaskCreate(prvLowPrioPrint, "printData", 4 * 2048, NULL, 0, &xHandleLowPrioTask);
+    // xTaskCreate(vSerialPrintDataTask, "SerialPrintDataTask", 4 * 2048, NULL, 0, &xHandleSerialPrintDataTask);
 
-    
 }

@@ -30,6 +30,8 @@ using namespace std;
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "driver/ledc.h"
+#include <driver/adc.h>
+#include <esp_adc_cal.h>
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -51,8 +53,10 @@ using namespace std;
 #include "icm/math.hpp"
 #include "icm/types.hpp"
 
-
 #include "SPIbus.hpp"
+
+#include "pin_map.hpp"
+
 static SPI_t& spi                     = vspi;  // hspi or vspi
 static constexpr int MOSI             = 23;
 static constexpr int MISO             = 19;
@@ -110,6 +114,15 @@ static const char *pcTmpFileDefault = "tmp_000.imu";
 /* More peripherals */ 
 static constexpr int PIN_BATT_STATUS            = 12;
 static constexpr int PIN_STATUS_LED             = 32;
+
+/* ADC configuration */ 
+#define DEFAULT_VREF    1100        //Use adc2_vref_to_gpio() to obtain a better estimate
+static esp_adc_cal_characteristics_t *adc_chars;
+static const adc1_channel_t adc_channel = ADC1_CHANNEL_0;     //GPIO36 on ADC1
+static const adc_bits_width_t width = ADC_WIDTH_BIT_12;
+static const adc_atten_t atten = ADC_ATTEN_DB_11;
+static const adc_unit_t unit = ADC_UNIT_1;
+uint8_t battery_percentage; 
 
 
 xQueueHandle data_queue; 
@@ -200,44 +213,41 @@ const uint8_t ucOTAUptateStart              = BIT3;
 
 static ICM_t ICM; 
 
-/* Functions */
+/* Tasks and Functions */
 
-static void prvMountSDCard(void);
-
-
-/* Tasks */
-
-TaskHandle_t icm_task_handle = NULL; 
-TaskHandle_t udp_cmd_task_handle = NULL; 
-
-TaskHandle_t xHandleStatusLED = NULL; 
-
-TaskHandle_t xHandleWriteFileSD = NULL; 
+TaskHandle_t xHandleStatusLEDTask = NULL; 
+TaskHandle_t xHandleBattStatusTask = NULL; 
+TaskHandle_t xHandleICMTask = NULL; 
+TaskHandle_t xHandleWriteFileSDTask = NULL; 
 TaskHandle_t xHandleTransmitFileTCP = NULL; 
 TaskHandle_t xHandleMountSDCard = NULL; 
-TaskHandle_t xHandleLowPrioTask = NULL; 
+TaskHandle_t xHandleSerialPrintDataTask = NULL; 
 
+TaskHandle_t xHandleMCastRCVTask = NULL; 
+TaskHandle_t xHandleOTAUpdateTask = NULL; 
 
-static void prvTransmitFileTCP(void*);
+esp_err_t vMountSDCard(void);
 
-static void prvWriteFileSD(void*);
+static void vTransmitFileTCPTask(void*);
 
-static void prvSimpleOtaExample(void*);
+static void vWriteFileSDTask(void*);
 
-static void prvICMTask(void*);
+static void vOTAUpdateTask(void*);
 
-static void prvLowPrioPrint(void*);
+static void vICMTask(void*);
 
-static void prvStatusLED(void*);
+static void vStatusLEDTask(void*);
 
-static void prvBattStatus(void*);
+static void vBattStatusTask(void*);
+
+static void check_efuse(void);
+
+static void print_char_val_type(esp_adc_cal_value_t val_type);
+
+static uint32_t bat_voltage_to_percentage(uint32_t voltage);
 
 
 static void icmISR(void*);
-
-static void udp_rx_commands_task(void*);
-
-static void udp_tx_sensor_data(void *pvParameters);
 
 static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 
@@ -249,7 +259,7 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ss
 
 static void provision_wifi();
 
-static void mcast_example_task(void *pvParameters); 
+static void vMCastRCVTask(void *pvParameters); 
 
 static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if);
 
