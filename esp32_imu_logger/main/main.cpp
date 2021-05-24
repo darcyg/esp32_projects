@@ -2,8 +2,6 @@
 #include "main.hpp"
 
 
-/* Tasks */
-
 static IRAM_ATTR void icmISR(TaskHandle_t taskHandle)
 {
     BaseType_t HPTaskWoken = pdFALSE;
@@ -380,6 +378,8 @@ static void print_char_val_type(esp_adc_cal_value_t val_type)
 }
 
 static void vBattStatusTask(void*){
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
+
     //Check if Two Point or Vref are burned into eFuse
     check_efuse();
 
@@ -400,9 +400,7 @@ static void vBattStatusTask(void*){
     uint32_t a[n] = {50};  
 
     //Continuously sample ADC1
-    while (1) {
-        char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
-
+    while (1) {        
         adc_reading = 0;
         //Multisampling
         for (uint8_t i=0; i<n_samples; i++) {
@@ -426,9 +424,9 @@ static void vBattStatusTask(void*){
             }
         temp /= n;
         battery_percentage = temp / 5 * 5; 
-        ESP_LOGW(TAG, "Battery Percentage: %d", battery_percentage);
-        vTaskDelay(pdMS_TO_TICKS(5000));
-
+        // wifi_log_i(TAG, "Battery Percentage: %d", battery_percentage);
+        wifi_log_i(TAG, "Battery Voltage: %d", voltage);
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 
@@ -1089,12 +1087,14 @@ extern "C" void app_main()
     // Create queues to store sensor readings and system ticks of the readings 
     data_queue = xQueueCreate(5, sizeof(struct DataFrame));
     icm_ticks_queue = xQueueCreate(kFIFOReadsMax, sizeof(int64_t));
+    // wifi_logging_queue = xQueueCreate(10, sizeof(WifiLogMsg));
+
 
     // Create status LED task
     xTaskCreate(vStatusLEDTask, "StatusLEDTask", 2048, NULL, 1, &xHandleStatusLEDTask); 
 
     // Create Battery Level 
-    xTaskCreate(vBattStatusTask, "BattStatusTask", 2048, NULL, 1, &xHandleBattStatusTask); 
+    xTaskCreate(vBattStatusTask, "BattStatusTask", 4*2048, NULL, 1, &xHandleBattStatusTask); 
 
     // provision WiFi and connect 
     provision_wifi(); 
@@ -1104,7 +1104,12 @@ extern "C" void app_main()
     if(ret == ESP_OK){
         xTaskCreate(vWriteFileSDTask, "WriteFileSDTask", 2 * 2048, NULL, 3, &xHandleWriteFileSDTask);
     }
-        
+    
+    // Create task for wifi-logging
+    start_wifi_logger(HOST_IP_ADDR, WIFI_LOG_PORT); 
+    // xTaskCreate(vWIFILoggingTask, "WIFILoggingTask", 4096, NULL, 2, NULL);
+
+
     // Create OTA update task 
     xTaskCreate(vOTAUpdateTask, "OTAUpdateTask", 8192, NULL, 3, &xHandleOTAUpdateTask);
 
