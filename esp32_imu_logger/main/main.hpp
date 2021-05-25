@@ -53,6 +53,8 @@ using namespace std;
 #include "icm/math.hpp"
 #include "icm/types.hpp"
 
+#include "wifi_logger.hpp"
+
 #include "SPIbus.hpp"
 
 #include "pin_map.hpp"
@@ -128,6 +130,9 @@ uint8_t battery_percentage;
 xQueueHandle data_queue; 
 xQueueHandle timestamp_queue; 
 xQueueHandle icm_ticks_queue;
+// xQueueHandle wifi_logging_queue; 
+
+// char WifiLogMsg[128];
 
 struct DataFrame 
 {
@@ -150,6 +155,7 @@ struct DataSample6Axis
 #define PORT 3333
 #define COMMAND_PORT 3334
 #define TCP_PORT 65432
+#define WIFI_LOG_PORT 50000
 
 #define MULTICAST_TTL 1
 
@@ -157,7 +163,6 @@ struct DataSample6Axis
 #define UDP_PORT 10000
 
 static const char *V4TAG = "mcast-ipv4";
-
 
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_EVENT = BIT0;
@@ -245,6 +250,9 @@ static void check_efuse(void);
 static void print_char_val_type(esp_adc_cal_value_t val_type);
 
 static uint32_t bat_voltage_to_percentage(uint32_t voltage);
+
+// static void vWIFILoggingTask(void *pvParameters);
+
 
 
 static void icmISR(void*);
