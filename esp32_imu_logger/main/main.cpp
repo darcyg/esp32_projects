@@ -16,8 +16,8 @@ static void vICMTask(void*)
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     EventBits_t udp_cmd_bits;
     //Initialize non-SPI GPIOs
-    gpio_set_direction((gpio_num_t)CS, GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)CS, 1);
+    gpio_set_direction(PIN_NUM_IMU_SPI_CS, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_NUM_IMU_SPI_CS, 1);
 
     gpio_set_direction((gpio_num_t)LOG_PIN, GPIO_MODE_OUTPUT);
     gpio_set_level((gpio_num_t)LOG_PIN, 1);
@@ -64,7 +64,7 @@ static void vICMTask(void*)
     ESP_LOGI(TAG, "n_interrupts_wait: %d\n",n_interrupts_wait);
 
     constexpr gpio_config_t kGPIOConfig{
-        .pin_bit_mask = (uint64_t) 0x1 << kInterruptPin,
+        .pin_bit_mask = (uint64_t) 0x1 << PIN_NUM_IMU_INTERUPT,
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
@@ -72,7 +72,7 @@ static void vICMTask(void*)
     };
     gpio_config(&kGPIOConfig);
     gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-    gpio_isr_handler_add((gpio_num_t) kInterruptPin, icmISR, xTaskGetCurrentTaskHandle());
+    gpio_isr_handler_add(PIN_NUM_IMU_INTERUPT, icmISR, xTaskGetCurrentTaskHandle());
     ESP_ERROR_CHECK(ICM.setInterruptConfig(kInterruptConfig));
     ESP_ERROR_CHECK(ICM.setInterruptEnabled(icm20601::INT_EN_RAWDATA_READY));
     // # # # # # # # # # # 
@@ -660,7 +660,7 @@ static void vTransmitFileTCPTask(void*)
     strcat(cFilepath, pcTmpFileDefault);
 
     char rx_buffer[128];
-    char host_ip[] = HOST_IP_ADDR;
+    // char host_ip[] = host_ip;
     int addr_family = 0;
     int ip_protocol = 0;
 
@@ -810,6 +810,7 @@ static void vMCastRCVTask(void *pvParameters)
 {
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
     EventBits_t udp_cmd_bits;
+    EventBits_t status_bits;
     while (1) {
         
         gpio_set_direction((gpio_num_t)SYNC_PIN, GPIO_MODE_INPUT_OUTPUT);
@@ -832,7 +833,7 @@ static void vMCastRCVTask(void *pvParameters)
         // set destination multicast addresses for sending from these sockets
         struct sockaddr_in sdestv4 = {
             .sin_family = PF_INET,
-            .sin_port = htons(UDP_PORT),
+            .sin_port = htons(MULTICAST_PORT),
         };
         // We know this inet_aton will pass because we did it above already
         inet_aton(MULTICAST_IPV4_ADDR, &sdestv4.sin_addr.s_addr);
@@ -878,7 +879,9 @@ static void vMCastRCVTask(void *pvParameters)
                         }
                         recvbuf[len] = 0; // Null-terminate whatever we received and treat like a string...
                         ESP_LOGI(TAG, "received %d bytes from %s:", len, raddr_name);
+                        // # # # # # # # # # # # 
                         // INTERPRET COMMAND 
+                        // # # # # # # # # # # # 
                         // Start measurement
                         if (strncmp(recvbuf, "rec_start", 9) == 0) {
                             ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
@@ -894,6 +897,7 @@ static void vMCastRCVTask(void *pvParameters)
                         else if (strncmp(recvbuf, "update_sensor", 13) == 0)
                         {
                             if(xEventGroupGetBits(command_event_group)&IsMeasuring_BIT){
+                                // TODO: change to wifi log
                                 ESP_LOGI(TAG, "Update cannot be started. Measurement in progress...");
                             }
                             else{
@@ -901,7 +905,18 @@ static void vMCastRCVTask(void *pvParameters)
                                 xEventGroupSetBits(command_event_group, ucOTAUptateStart);
                             }                                
                         }
+                        // Set host ip 
+                        else if (strncmp(recvbuf, "host_sync", 9) == 0)
+                        {
+                            if(!(xEventGroupGetBits(status_event_group)&ucHostFound_BIT)){
+                                host_ip = &raddr_name[0];
+                                xEventGroupSetBits(status_event_group, ucHostFound_BIT);
+                            } 
+                            // TODO SET SYNC PULSE 
+                        }
+                        // # # # # # # # # # # # 
                         // END INTERPRET COMMAND 
+                        // # # # # # # # # # # # 
                         ESP_LOGI(TAG, "%s; %d", recvbuf, sync_status);
                     }
                 }
@@ -940,9 +955,9 @@ static void vMCastRCVTask(void *pvParameters)
                     ESP_LOGE(TAG, "getaddrinfo() did not return any addresses");
                     break;
                 }
-                ((struct sockaddr_in *)res->ai_addr)->sin_port = htons(UDP_PORT);
+                ((struct sockaddr_in *)res->ai_addr)->sin_port = htons(MULTICAST_PORT);
                 inet_ntoa_r(((struct sockaddr_in *)res->ai_addr)->sin_addr, addrbuf, sizeof(addrbuf)-1);
-                // ESP_LOGI(TAG, "Sending to IPV4 multicast address %s:%d... \t %s",  addrbuf, UDP_PORT, sendbuf);
+                // ESP_LOGI(TAG, "Sending to IPV4 multicast address %s:%d... \t %s",  addrbuf, MULTICAST_PORT, sendbuf);
                 err = sendto(sock, sendbuf, len, 0, res->ai_addr, res->ai_addrlen);
                 freeaddrinfo(res);
                 if (err < 0) {
@@ -1014,7 +1029,7 @@ static int create_multicast_ipv4_socket(void)
 
     // Bind the socket to any address
     saddr.sin_family = PF_INET;
-    saddr.sin_port = htons(UDP_PORT);
+    saddr.sin_port = htons(MULTICAST_PORT);
     saddr.sin_addr.s_addr = htonl(INADDR_ANY);
     err = bind(sock, (struct sockaddr *)&saddr, sizeof(struct sockaddr_in));
     if (err < 0) {
@@ -1084,10 +1099,11 @@ extern "C" void app_main()
     status_event_group = xEventGroupCreate(); 
     command_event_group = xEventGroupCreate(); 
 
+    EventBits_t uxBits;
+
     // Create queues to store sensor readings and system ticks of the readings 
     data_queue = xQueueCreate(5, sizeof(struct DataFrame));
     icm_ticks_queue = xQueueCreate(kFIFOReadsMax, sizeof(int64_t));
-    // wifi_logging_queue = xQueueCreate(10, sizeof(WifiLogMsg));
 
 
     // Create status LED task
@@ -1099,26 +1115,39 @@ extern "C" void app_main()
     // provision WiFi and connect 
     provision_wifi(); 
 
+    // Create UDP Multicast task for receiving host_ip, commands and syncing 
+    xTaskCreate(vMCastRCVTask, "MCastRCVTask", 4096, NULL, 3, &xHandleMCastRCVTask);
+
+    // Wait for host before anything happens 
+    ESP_LOGI(TAG, "Waiting for host...");
+    uxBits = xEventGroupWaitBits(
+            status_event_group,   /* The event group being tested. */
+            ucHostFound_BIT, /* The bits within the event group to wait for. */
+            pdFALSE,        /* Don't clear bit*/
+            pdTRUE,       /* Wait for all bits */
+            portMAX_DELAY);  /* Wait forever if necessary. */ 
+    
+    if(uxBits & ucHostFound_BIT){
+        ESP_LOGI(TAG, "Host found: %s", host_ip);
+    }
+    
     // Set up file system 
     esp_err_t ret = vMountSDCard();
     if(ret == ESP_OK){
         xTaskCreate(vWriteFileSDTask, "WriteFileSDTask", 2 * 2048, NULL, 3, &xHandleWriteFileSDTask);
     }
-    
+
     // Create task for wifi-logging
-    start_wifi_logger(HOST_IP_ADDR, WIFI_LOG_PORT); 
+    start_wifi_logger(host_ip, WIFI_LOG_PORT); 
     // xTaskCreate(vWIFILoggingTask, "WIFILoggingTask", 4096, NULL, 2, NULL);
 
 
     // Create OTA update task 
     xTaskCreate(vOTAUpdateTask, "OTAUpdateTask", 8192, NULL, 3, &xHandleOTAUpdateTask);
 
-    // Initialize bus through either the Library API or esp-idf API
-    spi.begin(MOSI, MISO, SCLK);
+    // Initialize SPI bus 
+    spi.begin(PIN_NUM_IMU_SPI_MOSI, PIN_NUM_IMU_SPI_MISO, PIN_NUM_IMU_SPI_CLK);
     
-    // Create UDP Multicast task for receiving commands and syncing 
-    xTaskCreate(vMCastRCVTask, "MCastRCVTask", 4096, NULL, 3, &xHandleMCastRCVTask);
-
     // Create a task to setup ICM and read sensor data
     xTaskCreate(vICMTask, "ICMTask", 4 * 2048, NULL, 6, &xHandleICMTask);   
 

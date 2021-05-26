@@ -60,10 +60,6 @@ using namespace std;
 #include "pin_map.hpp"
 
 static SPI_t& spi                     = vspi;  // hspi or vspi
-static constexpr int MOSI             = 23;
-static constexpr int MISO             = 19;
-static constexpr int SCLK             = 18;
-static constexpr int CS               = 5;
 static constexpr uint32_t SPI_CLOCK_SPEED = 8*1000*1000;  // 8MHz
 
 static constexpr int LOG_PIN          = 33;
@@ -72,18 +68,17 @@ static constexpr int SYNC_PIN         = 17;
 
 void icm_spi_pre_transfer_callback(spi_transaction_t *t)
 {
-    gpio_set_level((gpio_num_t)CS, 0);
+    gpio_set_level(PIN_NUM_IMU_SPI_CS, 0);
 }
 
 void icm_spi_post_transfer_callback(spi_transaction_t *t)
 {
-    gpio_set_level((gpio_num_t)CS, 1);
+    gpio_set_level(PIN_NUM_IMU_SPI_CS, 1);
 }
 
 
 /* ICM configuration */
 
-static constexpr int kInterruptPin         = 17;  // GPIO_NUM
 static constexpr uint16_t kSampleRate      = 50;  // Hz
 static constexpr icm20601::accel_fs_t kAccelFS = icm20601::ACCEL_FS_4G;
 static constexpr icm20601::gyro_fs_t kGyroFS   = icm20601::GYRO_FS_500DPS;
@@ -150,8 +145,8 @@ struct DataSample6Axis
 // WIFI STUFF 
 /* Signal Wi-Fi events on this event-group */
 
-//#define HOST_IP_ADDR "192.168.178.28"
-#define HOST_IP_ADDR "192.168.178.68"
+static char* host_ip; //  = "192.168.178.68";
+
 #define PORT 3333
 #define COMMAND_PORT 3334
 #define TCP_PORT 65432
@@ -205,6 +200,7 @@ const uint8_t ucICMWriting_BIT        = BIT1;
 const uint8_t ucFSReady_BIT           = BIT2;
 const uint8_t ucRxCommandsReady_BIT   = BIT3;
 const uint8_t ucFileSaved_BIT         = BIT4;
+const uint8_t ucHostFound_BIT         = BIT5;
 
 // ... continue as needed 
 

@@ -2,6 +2,8 @@
 
 static const char* tag_wifi_logger = "wifi_logger";
 static QueueHandle_t wifi_logger_queue;
+static bool queue_created = false;
+
 
 /**
  * @brief Initialises message queue
@@ -191,7 +193,7 @@ void wifi_logger(void *xLogHost)
 		}
 		else
 		{
-			log_message = "Unknown error - receiving log message";
+			log_message = (char*) "Unknown error - receiving log message";
 			int len = send_data(handle, log_message);
 			ESP_LOGE(tag_wifi_logger, "%d %s", len, "Unknown error");
 		}

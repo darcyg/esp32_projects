@@ -27,8 +27,6 @@ typedef struct
     uint16_t port;
 } HostAddress_t;
 
-static bool queue_created = false;
-
 esp_err_t init_queue(void);
 void init_wifi(void);
 esp_err_t send_to_queue(char* log_message);
