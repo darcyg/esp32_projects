@@ -49,20 +49,18 @@ using namespace std;
 
 #include "sdkconfig.h"
 
+/* CUSTOM COMPONENTS */
 #include "ICM.hpp"
 #include "icm/math.hpp"
 #include "icm/types.hpp"
 
 #include "wifi_logger.hpp"
-
 #include "SPIbus.hpp"
-
-#include "pin_map.hpp"
+#include "util.hpp"
 
 static SPI_t& spi                     = vspi;  // hspi or vspi
 static constexpr uint32_t SPI_CLOCK_SPEED = 8*1000*1000;  // 8MHz
 
-static constexpr int LOG_PIN          = 33;
 static constexpr int SYNC_PIN         = 17;
 
 
@@ -100,17 +98,9 @@ constexpr uint8_t kFIFOReadsMax = (uint8_t)(kFIFOSize/kFIFOPacketSize);
 static const char* TAG = "IMU Logger";
 
 /* SD card configuation */
-
-static constexpr int PIN_NUM_SD_CMD            = 15;
-static constexpr int PIN_NUM_SD_D0             = 2;
-
 #define MOUNT_POINT "/sdcard"
 static const char *pcTmpFileDefault = "tmp_000.imu";
 
-
-/* More peripherals */ 
-static constexpr int PIN_BATT_STATUS            = 12;
-static constexpr int PIN_STATUS_LED             = 32;
 
 /* ADC configuration */ 
 #define DEFAULT_VREF    1100        //Use adc2_vref_to_gpio() to obtain a better estimate
@@ -125,9 +115,6 @@ uint8_t battery_percentage;
 xQueueHandle data_queue; 
 xQueueHandle timestamp_queue; 
 xQueueHandle icm_ticks_queue;
-// xQueueHandle wifi_logging_queue; 
-
-// char WifiLogMsg[128];
 
 struct DataFrame 
 {
@@ -147,17 +134,12 @@ struct DataSample6Axis
 
 static char* host_ip; //  = "192.168.178.68";
 
-#define PORT 3333
-#define COMMAND_PORT 3334
 #define TCP_PORT 65432
 #define WIFI_LOG_PORT 50000
 
-#define MULTICAST_TTL 1
-
 #define MULTICAST_IPV4_ADDR "224.3.29.71"
-#define UDP_PORT 10000
-
-static const char *V4TAG = "mcast-ipv4";
+#define MULTICAST_PORT 10000
+#define MULTICAST_TTL 1
 
 static EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_EVENT = BIT0;

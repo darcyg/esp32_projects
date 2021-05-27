@@ -19,8 +19,8 @@ static void vICMTask(void*)
     gpio_set_direction(PIN_NUM_IMU_SPI_CS, GPIO_MODE_OUTPUT);
     gpio_set_level(PIN_NUM_IMU_SPI_CS, 1);
 
-    gpio_set_direction((gpio_num_t)LOG_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)LOG_PIN, 1);
+    gpio_set_direction(PIN_NUM_DEBUG_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_NUM_DEBUG_PIN, 1);
 
     // Let ICM know which bus and address to use
     ICM.setBus(spi);
@@ -185,8 +185,8 @@ esp_err_t vMountSDCard(void)
     // GPIOs 15, 2, 4, 12, 13 should have external 10k pull-ups.
     // Internal pull-ups are not sufficient. However, enabling internal pull-ups
     // does make a difference some boards, so we do that here.
-    gpio_set_pull_mode(PIN_NUM_SDMMC_CMD, GPIO_PULLUP_ONLY);   // PIN_NUM_SD_CMD, needed in 4- and 1- line modes
-    gpio_set_pull_mode(PIN_NUM_SDMMC_D0, GPIO_PULLUP_ONLY);    // PIN_NUM_SD_D0, needed in 4- and 1-line modes
+    gpio_set_pull_mode(PIN_NUM_SDMMC_CMD, GPIO_PULLUP_ONLY);   // needed in 4- and 1- line modes
+    gpio_set_pull_mode(PIN_NUM_SDMMC_D0, GPIO_PULLUP_ONLY);    // needed in 4- and 1-line modes
 
     ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
@@ -245,10 +245,10 @@ static void vWriteFileSDTask(void*)
             }
             else{
                 // ESP_LOGI(TAG, "Successfully read data package from queue. n_samples: %d", data_frame.n_samples);
-                gpio_set_level((gpio_num_t)LOG_PIN, 0);
+                gpio_set_level(PIN_NUM_DEBUG_PIN, 0);
                 // fwrite (FIFOpacket , sizeof(uint8_t), sizeof(FIFOpacket), active_file);
                 fwrite (&data_frame , sizeof(data_frame), 1, active_file);
-                gpio_set_level((gpio_num_t)LOG_PIN, 1);
+                gpio_set_level(PIN_NUM_DEBUG_PIN, 1);
                 n_packets ++;
             }
         }
@@ -268,35 +268,6 @@ static void vWriteFileSDTask(void*)
     }
 }
 
-static void vSerialPrintDataTask(void*){
-    while(1){
-        struct DataFrame data_frame;
-        if(xQueueReceive(data_queue, &data_frame, 10000/portTICK_PERIOD_MS)!=pdTRUE){
-            ESP_LOGE(TAG, "Reading from queue faled. \n");
-        }
-        else{
-            icm20601::raw_axes_t accelRaw;  // accel raw axes 
-            icm20601::raw_axes_t gyroRaw;  // gyro raw axes 
-            icm20601::float_axes_t accelG;   // accel axes in (g) gravity format
-            icm20601::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
-            for(uint8_t i=0; i < data_frame.n_samples; i++){
-                accelRaw.x = data_frame.SensorReads[0+i*12] << 8 | data_frame.SensorReads[1+i*12];
-                accelRaw.y = data_frame.SensorReads[2+i*12] << 8 | data_frame.SensorReads[3+i*12];
-                accelRaw.z = data_frame.SensorReads[4+i*12] << 8 | data_frame.SensorReads[5+i*12];
-                gyroRaw.x  = data_frame.SensorReads[6+i*12] << 8 | data_frame.SensorReads[7+i*12];
-                gyroRaw.y  = data_frame.SensorReads[8+i*12] << 8 | data_frame.SensorReads[9+i*12];
-                gyroRaw.z  = data_frame.SensorReads[10+i*12] << 8 | data_frame.SensorReads[11+i*12];
-                
-                accelG = icm20601::accelGravity(accelRaw, kAccelFS);
-                gyroDPS = icm20601::gyroDegPerSec(gyroRaw, kGyroFS);
-
-                ESP_LOGI(TAG, "%d \t Acc.x: %+6.2f \t Acc.y: %+6.2f \t Acc.z: %+6.2f \t Gyr.x: %+7.2f \t Gyr.y: %+7.2f \t Gyr.z: %+7.2f", i, accelG.x, accelG.y, accelG.z, gyroDPS.x, gyroDPS.y, gyroDPS.z);
-            }
-        }
-
-    }
-    
-}
 
 static void vStatusLEDTask(void*){
 
@@ -315,7 +286,7 @@ static void vStatusLEDTask(void*){
     ledc_timer_config(&ledc_timer);
 
     ledc_channel_config_t ledc_channel = {
-            .gpio_num   = (gpio_num_t)PIN_STATUS_LED,
+            .gpio_num   = PIN_NUM_STATUS_LED,
             .speed_mode = LEDC_HIGH_SPEED_MODE,
             .channel    = LEDC_CHANNEL_0,
             .timer_sel  = LEDC_TIMER_0,
@@ -809,8 +780,6 @@ static void vTransmitFileTCPTask(void*)
 static void vMCastRCVTask(void *pvParameters)
 {
     char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
-    EventBits_t udp_cmd_bits;
-    EventBits_t status_bits;
     while (1) {
         
         gpio_set_direction((gpio_num_t)SYNC_PIN, GPIO_MODE_INPUT_OUTPUT);
@@ -984,14 +953,14 @@ static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if)
     // Configure multicast address to listen to
     err = inet_aton(MULTICAST_IPV4_ADDR, &imreq.imr_multiaddr.s_addr);
     if (err != 1) {
-        ESP_LOGE(V4TAG, "Configured IPV4 multicast address '%s' is invalid.", MULTICAST_IPV4_ADDR);
+        ESP_LOGE(TAG, "Configured IPV4 multicast address '%s' is invalid.", MULTICAST_IPV4_ADDR);
         // Errors in the return value have to be negative
         err = -1;
         return err;
     }
     ESP_LOGI(TAG, "Configured IPV4 Multicast address %s", inet_ntoa(imreq.imr_multiaddr.s_addr));
     if (!IP_MULTICAST(ntohl(imreq.imr_multiaddr.s_addr))) {
-        ESP_LOGW(V4TAG, "Configured IPV4 multicast address '%s' is not a valid multicast address. This will probably not work.", MULTICAST_IPV4_ADDR);
+        ESP_LOGW(TAG, "Configured IPV4 multicast address '%s' is not a valid multicast address. This will probably not work.", MULTICAST_IPV4_ADDR);
     }
 
     if (assign_source_if) {
@@ -1000,7 +969,7 @@ static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if)
         err = setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF, &iaddr,
                          sizeof(struct in_addr));
         if (err < 0) {
-            ESP_LOGE(V4TAG, "Failed to set IP_MULTICAST_IF. Error %d", errno);
+            ESP_LOGE(TAG, "Failed to set IP_MULTICAST_IF. Error %d", errno);
             return err;
         }
     }
@@ -1008,7 +977,7 @@ static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if)
     err = setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP,
                          &imreq, sizeof(struct ip_mreq));
     if (err < 0) {
-        ESP_LOGE(V4TAG, "Failed to set IP_ADD_MEMBERSHIP. Error %d", errno);
+        ESP_LOGE(TAG, "Failed to set IP_ADD_MEMBERSHIP. Error %d", errno);
         return err;
     }
     return err;

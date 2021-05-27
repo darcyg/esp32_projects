@@ -1,5 +1,5 @@
-#ifndef PIN_MAP_HPP
-#define PIN_MAP_HPP
+#ifndef _UTIL_PIN_CONFIG_
+#define _UTIL_PIN_CONFIG_
 
 // Pin Map for ESP IO Pins used
 
@@ -14,10 +14,13 @@
 #define PIN_NUM_IMU_SPI_CLK        GPIO_NUM_18
 #define PIN_NUM_IMU_SPI_MISO       GPIO_NUM_19
 
+#define PIN_NUM_DEBUG_PIN          GPIO_NUM_22
 #define PIN_NUM_IMU_SPI_MOSI       GPIO_NUM_23
 
 #define PIN_NUM_STATUS_LED         GPIO_NUM_32
 // #define PIN_NUM_ADC_VBAT           GPIO_NUM_33
 #define PIN_NUM_ADC_VBAT           GPIO_NUM_36
+
+
 
 #endif
