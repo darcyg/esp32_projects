@@ -1,14 +1,34 @@
 
 #include "main.hpp"
 
-/* DEBUG PIN CONFIG */ 
-gpio_config_t io_conf = {
-    .pin_bit_mask = (uint64_t) 0x1 << PIN_NUM_DEBUG_PIN,
-    .mode = GPIO_MODE_OUTPUT,
-    .pull_up_en = GPIO_PULLUP_DISABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE
-};
+void DataFrame2NetworkPacket(DataFrame* data, float network_packet[][7], int64_t t_0)
+{
+    uint32_t ulTime_us; 
+    icm20601::raw_axes_t accelRaw;  // accel raw axes 
+    icm20601::raw_axes_t gyroRaw;  // gyro raw axes 
+    icm20601::float_axes_t accelG;   // accel axes in (g) gravity format
+    icm20601::float_axes_t gyroDPS;  // gyro axes in (DPS) º/s format
+    for(uint8_t i=0; i <= data->n_samples-1; i++){
+        ulTime_us = (uint32_t)(data->Timestamps[i] - 0);
+        accelRaw.x = data->SensorReads[0+i*12] << 8 | data->SensorReads[1+i*12];
+        accelRaw.y = data->SensorReads[2+i*12] << 8 | data->SensorReads[3+i*12];
+        accelRaw.z = data->SensorReads[4+i*12] << 8 | data->SensorReads[5+i*12];
+        gyroRaw.x  = data->SensorReads[6+i*12] << 8 | data->SensorReads[7+i*12];
+        gyroRaw.y  = data->SensorReads[8+i*12] << 8 | data->SensorReads[9+i*12];
+        gyroRaw.z  = data->SensorReads[10+i*12] << 8 | data->SensorReads[11+i*12];
+
+        accelG = icm20601::accelGravity(accelRaw, kAccelFS);
+        gyroDPS = icm20601::gyroDegPerSec(gyroRaw, kGyroFS);
+
+        network_packet[i][0] = (float)(ulTime_us/1000.0);
+        network_packet[i][1] = accelG.x;
+        network_packet[i][2] = accelG.y;
+        network_packet[i][3] = accelG.z;
+        network_packet[i][4] = gyroDPS.x;
+        network_packet[i][5] = gyroDPS.y;
+        network_packet[i][6] = gyroDPS.z;
+    }
+}
 
 static IRAM_ATTR void icmISR(TaskHandle_t taskHandle)
 {
@@ -133,7 +153,7 @@ static void vICMTask(void*)
         // Send data to queue only if measurement is started
         udp_cmd_bits = xEventGroupGetBits(command_event_group); 
 
-        if(udp_cmd_bits&StartMeasurement_BIT){
+        if(udp_cmd_bits && (StartMeasurement_BIT || ucSendUnicastDataStream_BIT)){
         // if(true){
             if(xQueueSendToBack(data_queue, (void*) &data_frame, 1000/portTICK_RATE_MS)!=pdTRUE){
                 wifi_log_e(TAG, "Writing to queue faled.", "");
@@ -692,7 +712,6 @@ static void vTransmitFileTCPTask(void*)
                 uint16_t i_frame = 0;
                 int64_t t_0 = 0; 
                 
-
                 while(fread(&pDataBuffer, sizeof(pDataBuffer), 1, pFile)){
                     ESP_LOGI(TAG, "frame: %d: n_samples = %d ", i_frame, pDataBuffer.n_samples);
                     float tcp_packet[pDataBuffer.n_samples][7];
@@ -824,13 +843,14 @@ static void vMCastRCVCommandsTask(void *pvParameters)
             else if (s > 0) {
                 if (FD_ISSET(sock, &rfds)) {
                     // Incoming datagram received
-                    char recvbuf[48];
+                    host_command_t host_cmd;
                     char raddr_name[32] = { 0 };
 
                     struct sockaddr_in6 raddr; // Large enough for both IPv4 or IPv6
                     socklen_t socklen = sizeof(raddr);
-                    int len = recvfrom(sock, recvbuf, sizeof(recvbuf)-1, 0,
+                    int len = recvfrom(sock, &host_cmd, sizeof(host_cmd), 0,
                                        (struct sockaddr *)&raddr, &socklen);
+
                     if (len < 0) {
                         ESP_LOGE(TAG, "multicast recvfrom failed: errno %d", errno);
                         err = -1;
@@ -841,41 +861,51 @@ static void vMCastRCVCommandsTask(void *pvParameters)
                         if (raddr.sin6_family == PF_INET) {
                             inet_ntoa_r(((struct sockaddr_in *)&raddr)->sin_addr.s_addr, raddr_name, sizeof(raddr_name)-1);
                         }
-                        recvbuf[len] = 0; // Null-terminate whatever we received and treat like a string...
-                        ESP_LOGI(TAG, "received %d bytes from %s: %s", len, raddr_name, recvbuf);
+                        ESP_LOGI(TAG, "received %d bytes from %s: %04x", len, raddr_name, host_cmd);
                         // # # # # # # # # # # # 
                         // INTERPRET COMMAND 
                         // # # # # # # # # # # # 
-                        // Start measurement
-                        if (strncmp(recvbuf, "rec_start", 9) == 0) {
-                            ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
-                            xEventGroupSetBits(command_event_group, StartMeasurement_BIT);
-                        }
-                        // Stop measurement                
-                        else if (strncmp(recvbuf, "rec_stop", 8) == 0)
+                        switch(host_cmd)
                         {
-                            ESP_LOGI(TAG, "Received Stop Command. Clearing Event Bit.");
-                            xEventGroupClearBits(command_event_group, StartMeasurement_BIT);
-                        }
-                        // OTA sensor update
-                        else if (strncmp(recvbuf, "update_sensor", 13) == 0)
-                        {
-                            if(xEventGroupGetBits(command_event_group)&IsMeasuring_BIT){
-                                // TODO: change to wifi log
-                                ESP_LOGI(TAG, "Update cannot be started. Measurement in progress...");
-                            }
-                            else{
-                                ESP_LOGI(TAG, "Received OTA Update Command. Setting Event Bit.");
-                                xEventGroupSetBits(command_event_group, ucOTAUptateStart);
-                            }                                
-                        }
-                        // Set host ip from beacon
-                        else if (strncmp(recvbuf, "host_beacon", 11) == 0)
-                        {
-                            if(!(xEventGroupGetBits(status_event_group)&ucHostFound_BIT)){
-                                host_ip = &raddr_name[0];
-                                xEventGroupSetBits(status_event_group, ucHostFound_BIT);
-                            } 
+                            case REC_START: 
+                                ESP_LOGI(TAG, "Received Start Command. Setting Event Bit.");
+                                xEventGroupSetBits(command_event_group, StartMeasurement_BIT);
+                                break;
+                            case REC_STOP:
+                                ESP_LOGI(TAG, "Received Stop Command. Clearing Event Bit.");
+                                xEventGroupClearBits(command_event_group, StartMeasurement_BIT);
+                                break;
+                            case UPDATE_FIRMWARE:
+                                if(xEventGroupGetBits(command_event_group)&IsMeasuring_BIT){
+                                    // TODO: send message to host like the following 
+                                    ESP_LOGI(TAG, "Update cannot be started. Measurement in progress...");
+                                }
+                                else{
+                                    ESP_LOGI(TAG, "Received OTA Update Command. Setting Event Bit.");
+                                    xEventGroupSetBits(command_event_group, ucOTAUptateStart);
+                                }
+                                break;  
+                            case HOST_BEACON:
+                                ESP_LOGI(TAG, "Host Beacon received.");
+                                if(!(xEventGroupGetBits(status_event_group)&ucHostFound_BIT)){
+                                    host_ip = &raddr_name[0];
+                                    xEventGroupSetBits(status_event_group, ucHostFound_BIT);
+                                } 
+                                break;
+                            case REQUEST_FILE:
+                                ESP_LOGI(TAG, "Host requests file.");
+                                break;
+                                // TODO: IMPLEMENT
+                            case START_DATA_STREAM:
+                                ESP_LOGI(TAG, "Host requests data stream.");
+                                xEventGroupSetBits(command_event_group, ucSendUnicastDataStream_BIT);
+                                break;
+                            case STOP_DATA_STREAM:
+                                ESP_LOGI(TAG, "Host requests data stream to stop.");
+                                xEventGroupClearBits(command_event_group, ucSendUnicastDataStream_BIT);
+                                break;
+                            default:
+                                ESP_LOGI(TAG, "Could not interpret host command: %04x", host_cmd);
                         }
                         // # # # # # # # # # # # 
                         // END INTERPRET COMMAND 
@@ -1086,6 +1116,59 @@ static int create_multicast_ipv4_socket(int port)
     return sock;
 }
 
+// # # # # # # # # # # 
+// UDP UNICAST
+// # # # # # # # # # # 
+
+static void vUnicastDataStreamTask(void *pvParameters)
+{
+    char* TAG = pcTaskGetTaskName(xTaskGetCurrentTaskHandle());
+    int addr_family = 0;
+    int ip_protocol = 0;
+
+    while (1) {
+        struct sockaddr_in dest_addr;
+        dest_addr.sin_addr.s_addr = inet_addr(host_ip);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(UNICAST_DATA_STREAM_PORT);
+        addr_family = AF_INET;
+        ip_protocol = IPPROTO_IP;
+
+        int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
+        if (sock < 0) {
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            break;
+        }
+
+        while (1) {
+            if (xEventGroupGetBits(command_event_group)&ucSendUnicastDataStream_BIT) {
+                ESP_LOGI(TAG, "Starting Data Stream.");
+                struct DataFrame data_frame;
+                if(xQueueReceive(data_queue, &data_frame, 3000/portTICK_PERIOD_MS)!=pdTRUE){
+                    ESP_LOGE(TAG, "Reading from queue failed. \n");
+                }
+                else{
+                    float udp_packet[data_frame.n_samples][7];
+                    DataFrame2NetworkPacket(&data_frame, udp_packet, 0);
+                    int err = sendto(sock, udp_packet, sizeof(udp_packet), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+                    if (err < 0) {
+                        ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                        break;
+                    }    
+                }
+            }
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+        if (sock != -1) {
+            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            shutdown(sock, 0);
+            close(sock);
+        }
+    }
+    vTaskDelete(NULL);
+}
+
+
 
 // # # # # # # # # # # 
 // HTTP OTA FIRMWARE 
@@ -1190,4 +1273,8 @@ extern "C" void app_main()
     
     // Create a task to setup ICM and read sensor data
     xTaskCreate(vICMTask, "ICMTask", 4 * 2048, NULL, 6, &xHandleICMTask);   
+
+    // Create UDP unicast data streaming task
+    xTaskCreate(vUnicastDataStreamTask, "UnicastDataStreamTask", 4096, NULL, 3, NULL);
+
 }

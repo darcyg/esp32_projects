@@ -59,6 +59,18 @@ using namespace std;
 #include "SPIbus.hpp"
 #include "util.hpp"
 
+typedef enum {
+    CMD_NONE            = 0, 
+    REC_START           = 1,
+    REC_STOP            = 2,
+    UPDATE_FIRMWARE     = 3,
+    HOST_BEACON         = 4,
+    REQUEST_FILE        = 5,
+    START_DATA_STREAM   = 6,
+    STOP_DATA_STREAM    = 7,
+} host_command_t;
+
+
 static SPI_t& spi                     = vspi;  // hspi or vspi
 static constexpr uint32_t SPI_CLOCK_SPEED = 8*1000*1000;  // 8MHz
 
@@ -73,9 +85,18 @@ void icm_spi_post_transfer_callback(spi_transaction_t *t)
 }
 
 
+/* DEBUG PIN CONFIG */ 
+gpio_config_t io_conf = {
+    .pin_bit_mask = (uint64_t) 0x1 << PIN_NUM_DEBUG_PIN,
+    .mode = GPIO_MODE_OUTPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE
+};
+
 /* ICM configuration */
 
-static constexpr uint16_t kSampleRate      = 1000;  // Hz
+static constexpr uint16_t kSampleRate      = 100;  // Hz
 static constexpr icm20601::accel_fs_t kAccelFS = icm20601::ACCEL_FS_4G;
 static constexpr icm20601::gyro_fs_t kGyroFS   = icm20601::GYRO_FS_500DPS;
 static constexpr icm20601::dlpf_t kDLPF        = icm20601::DLPF_98HZ;
@@ -83,13 +104,13 @@ static constexpr icm20601::int_config_t kInterruptConfig{
     .level = icm20601::INT_LVL_ACTIVE_HIGH,
     .drive = icm20601::INT_DRV_PUSHPULL,
     .mode  = icm20601::INT_MODE_PULSE50US,
-    .clear = icm20601::INT_CLEAR_STATUS_REG  //
+    .clear = icm20601::INT_CLEAR_STATUS_REG  
 };
 
 // FIFO
 constexpr uint16_t kFIFOPacketSize = 12;  // in Byte
 constexpr uint16_t kFIFOSize = 512;  // in Byte
-constexpr uint8_t kFIFOReadsMax = (uint8_t)(kFIFOSize/kFIFOPacketSize); 
+constexpr uint8_t kFIFOReadsMax = (uint8_t)(kFIFOSize/kFIFOPacketSize); // used to alloc timestamp array
 
 /* END ICM configuration */
 
@@ -136,6 +157,7 @@ static char* host_ip; //  = "192.168.178.68";
 
 #define TCP_PORT 65432
 #define WIFI_LOG_PORT 50000
+#define UNICAST_DATA_STREAM_PORT 50505
 
 #define MULTICAST_IPV4_ADDR "224.3.29.71"
 #define MULTICAST_SYNC_PORT 10000
@@ -194,6 +216,7 @@ const uint8_t ICMReadyForMeasurement_BIT    = BIT0;
 const uint8_t StartMeasurement_BIT          = BIT1;
 const uint8_t IsMeasuring_BIT               = BIT2;
 const uint8_t ucOTAUptateStart              = BIT3;
+const uint8_t ucSendUnicastDataStream_BIT   = BIT4;
 
 
 static ICM_t ICM; 
@@ -213,6 +236,8 @@ TaskHandle_t xHandleOTAUpdateTask = NULL;
 
 esp_err_t vMountSDCard(void);
 
+void DataFrame2NetworkPacket(DataFrame* data, float* network_packet[], int64_t t_0);
+
 static void vTransmitFileTCPTask(void*);
 
 static void vWriteFileSDTask(void*);
@@ -230,9 +255,6 @@ static void check_efuse(void);
 static void print_char_val_type(esp_adc_cal_value_t val_type);
 
 static uint32_t bat_voltage_to_percentage(uint32_t voltage);
-
-// static void vWIFILoggingTask(void *pvParameters);
-
 
 
 static void icmISR(void*);
@@ -254,6 +276,8 @@ static void vMCastSyncTask(void *pvParameters);
 static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if);
 
 static int create_multicast_ipv4_socket(int port);
+
+static void vUnicastDataStreamTask(void *pvParameters); 
 
 /* Tasks */
 
