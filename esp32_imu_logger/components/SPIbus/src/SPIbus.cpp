@@ -29,6 +29,7 @@ IN THE SOFTWARE.
  #include "esp_log.h"
  #include "esp_err.h"
  #include "sdkconfig.h"
+ #include "esp_intr_alloc.h"
 
 
 #define SPIBUS_LOG_RW(format, ... ) ESP_LOGI(TAG, format, ##__VA_ARGS__)
@@ -64,6 +65,7 @@ esp_err_t SPI::begin(int mosi_io_num, int miso_io_num, int sclk_io_num, int max_
     config.quadwp_io_num = -1;  // -1 not used
     config.quadhd_io_num = -1;  // -1 not used
     config.max_transfer_sz = max_transfer_sz; //16*320*2+8; // max_transfer_sz;
+    config.intr_flags = ESP_INTR_FLAG_IRAM;
     return spi_bus_initialize(host, &config, 1);  // 0 DMA not used
 }
 
