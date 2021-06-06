@@ -32,6 +32,7 @@ using namespace std;
 #include "driver/ledc.h"
 #include <driver/adc.h>
 #include <esp_adc_cal.h>
+#include "soc/adc_channel.h"
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -61,9 +62,6 @@ using namespace std;
 static SPI_t& spi                     = vspi;  // hspi or vspi
 static constexpr uint32_t SPI_CLOCK_SPEED = 8*1000*1000;  // 8MHz
 
-static constexpr int SYNC_PIN         = 17;
-
-
 void icm_spi_pre_transfer_callback(spi_transaction_t *t)
 {
     gpio_set_level(PIN_NUM_IMU_SPI_CS, 0);
@@ -77,7 +75,7 @@ void icm_spi_post_transfer_callback(spi_transaction_t *t)
 
 /* ICM configuration */
 
-static constexpr uint16_t kSampleRate      = 50;  // Hz
+static constexpr uint16_t kSampleRate      = 1000;  // Hz
 static constexpr icm20601::accel_fs_t kAccelFS = icm20601::ACCEL_FS_4G;
 static constexpr icm20601::gyro_fs_t kGyroFS   = icm20601::GYRO_FS_500DPS;
 static constexpr icm20601::dlpf_t kDLPF        = icm20601::DLPF_98HZ;
@@ -105,12 +103,14 @@ static const char *pcTmpFileDefault = "tmp_000.imu";
 /* ADC configuration */ 
 #define DEFAULT_VREF    1100        //Use adc2_vref_to_gpio() to obtain a better estimate
 static esp_adc_cal_characteristics_t *adc_chars;
-static const adc1_channel_t adc_channel = ADC1_CHANNEL_0;     //GPIO36 on ADC1
+static const adc1_channel_t adc_channel = ADC1_GPIO33_CHANNEL;  // TODO: CHECK AGAINST CUSTOM PIN_CONFIG.H
 static const adc_bits_width_t width = ADC_WIDTH_BIT_12;
 static const adc_atten_t atten = ADC_ATTEN_DB_11;
 static const adc_unit_t unit = ADC_UNIT_1;
 uint8_t battery_percentage; 
 
+
+/* END DEBUG PIN CONFIG */ 
 
 xQueueHandle data_queue; 
 xQueueHandle timestamp_queue; 
@@ -138,7 +138,9 @@ static char* host_ip; //  = "192.168.178.68";
 #define WIFI_LOG_PORT 50000
 
 #define MULTICAST_IPV4_ADDR "224.3.29.71"
-#define MULTICAST_PORT 10000
+#define MULTICAST_SYNC_PORT 10000
+#define MULTICAST_CMD_PORT 12345
+
 #define MULTICAST_TTL 1
 
 static EventGroupHandle_t wifi_event_group;
@@ -204,9 +206,9 @@ TaskHandle_t xHandleICMTask = NULL;
 TaskHandle_t xHandleWriteFileSDTask = NULL; 
 TaskHandle_t xHandleTransmitFileTCP = NULL; 
 TaskHandle_t xHandleMountSDCard = NULL; 
-TaskHandle_t xHandleSerialPrintDataTask = NULL; 
 
 TaskHandle_t xHandleMCastRCVTask = NULL; 
+TaskHandle_t xHandleMCastSyncTask = NULL; 
 TaskHandle_t xHandleOTAUpdateTask = NULL; 
 
 esp_err_t vMountSDCard(void);
@@ -245,11 +247,13 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ss
 
 static void provision_wifi();
 
-static void vMCastRCVTask(void *pvParameters); 
+static void vMCastRCVCommandsTask(void *pvParameters); 
+
+static void vMCastSyncTask(void *pvParameters); 
 
 static int socket_add_ipv4_multicast_group(int sock, bool assign_source_if);
 
-static int create_multicast_ipv4_socket(void);
+static int create_multicast_ipv4_socket(int port);
 
 /* Tasks */
 
